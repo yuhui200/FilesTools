@@ -259,6 +259,7 @@ npm run dev
 
 > 如果后端不在默认地址，启动前端前设置环境变量：
 > `VITE_BACKEND_URL=http://192.168.1.10:8000 npm run dev`
+> （也可以写进 `frontend/.env`，两种写法的优先级见下面配置项一节的「前端环境变量」）
 
 ### 3. 试一下
 
@@ -1644,17 +1645,33 @@ LibreOffice **无法指定输出体积**，只能转完再压。所以流程是�
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `VITE_API_BASE_URL` | 空（相对路径） | 后端地址。前后端分开部署时设置 |
-| `VITE_BACKEND_URL` | `http://127.0.0.1:8000` | 仅供 `npm run dev` 的代理使用 |
+| `VITE_BACKEND_URL` | `http://127.0.0.1:8000` | 仅供 `npm run dev` 的代理使用，不进产物 |
 
-这两个变量的**生效机制不一样，别想当然**（已实测）：
+两个变量都写在 `frontend/.env`，但**去向完全不一样，别想当然**（已实测）：
 
-- `VITE_API_BASE_URL` 由前端代码通过 `import.meta.env` 读取，写在
-  `frontend/.env` 里**有效**，构建时会被静态替换进产物。
-- `VITE_BACKEND_URL` 由 `vite.config.ts` 通过 `process.env` 读取，而 Vite
-  **不会**把 `.env` 的值灌进 `process.env` —— 所以写在 `frontend/.env` 里是
-  **静默失效**的。实测：写 `VITE_BACKEND_URL=http://probe.invalid:9999`，
-  解析出的代理 target 仍是兜底的 `http://127.0.0.1:8000`，且不报任何错。
-  要改它只能在命令行上设：`VITE_BACKEND_URL=http://192.168.1.10:8000 npm run dev`。
+- `VITE_API_BASE_URL` 是**给前端代码**用的。前端通过 `import.meta.env` 读它，
+  Vite 在**构建时把这个值静态替换进产物** —— 所以改它必须重新 `npm run build`。
+  留空 = 用相对路径，前后端同源部署时的正确选择。
+- `VITE_BACKEND_URL` 是**给开发服务器**用的，只影响 `npm run dev` 时 `/api` 的
+  代理目标，**不进构建产物**。它由 `vite.config.ts` 在**配置加载时**通过
+  `loadEnv()` 读取，改了要重启 dev server。
+
+`VITE_BACKEND_URL` 的优先级是 **命令行/系统环境变量 > `frontend/.env` > 兜底默认值**
+（顺序不能反，否则命令行的值会被 `.env` 覆盖）。两种写法都行：
+
+```bash
+# 写在 frontend/.env 里（推荐，不用每次敲）
+VITE_BACKEND_URL=http://192.168.1.10:8000
+
+# 或者临时在命令行上指定
+VITE_BACKEND_URL=http://192.168.1.10:8000 npm run dev
+```
+
+> 历史坑：早期版本这里读的是 `process.env`，而 Vite **不会**把 `.env` 的值灌进
+> `process.env`（只放进 `config.env` / `import.meta.env`），于是写在
+> `frontend/.env` 里的 `VITE_BACKEND_URL` 是**静默失效**的 —— 代理 target 一直
+> 停在兜底值且不报任何错。已改为函数式配置 + `loadEnv()` 修掉，
+> 四种情形（无 `.env` / 仅 `.env` / 仅命令行 / 两者都有）均已实测。
 
 `frontend/` 下另有一份 [`.env.example`](frontend/.env.example)，把这两条也写在了那里
 （Vite 只从**前端项目目录**读 `.env`，仓库根目录的 `.env` 与它无关）。
@@ -1662,6 +1679,13 @@ LibreOffice **无法指定输出体积**，只能转完再压。所以流程是�
 ---
 
 ## 安全措施
+
+> ⚠️ **先说清楚前提：本项目没有任何身份认证**（没有登录、没有 API Key、没有多租户），
+> 也**没有速率限制**。任何能访问到端口的人都能使用全部功能并消耗服务器的 CPU 和磁盘。
+> 默认监听 `0.0.0.0` 是为了本机/局域网调试，**不要直接暴露到公网** ——
+> 要给别人用请在前端套一层带认证的反向代理。
+> 完整说明、已实现的防护清单、以及**明确不在防护范围内**的事项见
+> [SECURITY.md](SECURITY.md)（漏洞请走该文件里写的私有上报渠道）。
 
 对应需求中的 10 条文件安全要求：
 
