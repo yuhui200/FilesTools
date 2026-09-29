@@ -12,15 +12,15 @@
 
 ## 目录
 
+- [环境要求](#环境要求)
+- [可选组件（HEIC / OCR）](#可选组件heic--ocr)
+- [快速开始](#快速开始)
+- [生产模式部署](#生产模式部署)
 - [已实现的功能](#已实现的功能)
 - [统一转换中心](#统一转换中心)
 - [批量处理与任务队列](#批量处理与任务队列)
 - [技术栈](#技术栈)
 - [项目结构](#项目结构)
-- [环境要求](#环境要求)
-- [可选组件（HEIC / OCR）](#可选组件heic--ocr)
-- [快速开始](#快速开始)
-- [生产模式部署](#生产模式部署)
 - [压缩是怎么工作的](#压缩是怎么工作的)
 - [格式转换与图片几何操作是怎么工作的](#格式转换与图片几何操作是怎么工作的)
 - [PDF 工具是怎么工作的](#pdf-工具是怎么工作的)
@@ -34,6 +34,320 @@
 - [常见问题](#常见问题)
 - [后续阶段](#后续阶段)
 - [许可证](#许可证)
+
+---
+
+## 环境要求
+
+| 组件 | 版本 | 本项目验证环境 | 必需？ |
+| --- | --- | --- | --- |
+| Python | 3.10 及以上 | 3.14.5 | 必需 |
+| Node.js | 18 及以上 | 24.15.0 | 仅构建前端时需要 |
+| npm | 9 及以上 | 11.12.1 | 仅构建前端时需要 |
+| LibreOffice | 7.0 及以上 | 26.2.5 | **可选**，只有 Word / Excel / PPT 转 PDF 需要 |
+| pillow-heif | 1.8.0 | 已装 | **可选**，只有 HEIC 需要 |
+| rapidocr-onnxruntime | 1.2.3 | 已装 | **可选**，只有 PDF→Word 的扫描件 OCR 需要 |
+| Playwright | — | 已装 | 仅验收脚本需要 |
+
+> OCR 引擎用的是 **rapidocr-onnxruntime**（纯 pip 安装、自带中英文模型），不是 Tesseract ——
+> 换引擎只需要改 `services/ocr_service.py` 里的 `_load_engine`。
+
+### LibreOffice 安装要求
+
+只有 **Word / Excel / PowerPoint 转 PDF** 需要它。图片工具、PDF 工具、TXT 转 PDF 都不需要；
+没装的时候这三个页面会明确提示「当前服务器缺少 Office 转换组件，请联系管理员。」
+并禁用开始按钮，其余功能完全不受影响。
+
+**为什么必须是完整安装**：转换走的是无界面模式（headless），但需要 `soffice` 可执行文件
+**和**它依赖的过滤器组件（`program/` 下的 `*.so` / `*.dll`、`share/` 下的过滤器配置）。
+只拷一个 `soffice` 二进制是不行的。绝大多数发行版的官方包都是完整安装，照下面装即可。
+
+**Windows**
+
+```powershell
+winget install TheDocumentFoundation.LibreOffice
+# 或者从 https://www.libreoffice.org/download/ 下载 .msi 安装
+```
+
+默认装在 `C:\Program Files\LibreOffice\program\soffice.com`，本服务会自动找到它。
+
+**Linux（Debian / Ubuntu）**
+
+```bash
+sudo apt-get update && sudo apt-get install -y libreoffice --no-install-recommends
+```
+
+`--no-install-recommends` 会跳过一堆图形界面依赖，但**会一并跳过部分过滤器**。
+如果转换报「文件转换失败」，改用完整的 `sudo apt-get install -y libreoffice`。
+
+**Linux（RHEL / CentOS / Fedora）**
+
+```bash
+sudo dnf install -y libreoffice-headless libreoffice-writer libreoffice-calc libreoffice-impress
+```
+
+**Docker**
+
+```dockerfile
+FROM python:3.12-slim
+
+# LibreOffice 体积不小（约 400 MB），单独一层，改代码时不会重复下载
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libreoffice-writer libreoffice-calc libreoffice-impress \
+        fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
+# 中文字体：没有它，中文文档会整篇变成方框
+# （fonts-noto-cjk 在上面已经装了；也可以挂载宿主机的字体目录）
+
+WORKDIR /app
+COPY backend/requirements.txt backend/
+RUN pip install --no-cache-dir -r backend/requirements.txt
+COPY backend/ backend/
+COPY frontend/dist/ frontend/dist/
+
+ENV FILETOOLS_LIBREOFFICE_PATH=/usr/bin/soffice
+EXPOSE 8000
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "backend"]
+```
+
+> ⚠️ **这份 Dockerfile 没有在本项目环境中实测过**（开发机是 Windows，没有 Docker）。
+> 上面的包名与路径按官方文档写，但请以你自己构建的结果为准。
+> 特别是 **中文字体**：`python:*-slim` 镜像里一个中文字体都没有，
+> 不装 `fonts-noto-cjk` 的话中文 PDF 会全是方框。
+
+**指定路径**
+
+自动查找的顺序是：`FILETOOLS_LIBREOFFICE_PATH` → 常见安装位置 → `PATH` 里的 `soffice` / `libreoffice`。
+Windows 上优先 `soffice.com` 而不是 `soffice.exe`（两者是同一个启动器，区别只在 PE 的
+console-subsystem 位：`.com` 会阻塞并把输出交给我们，`.exe` 不会）。装在非常规位置时用环境变量指定：
+
+```bash
+FILETOOLS_LIBREOFFICE_PATH=/opt/libreoffice/program/soffice uvicorn main:app --port 8000
+```
+
+可以指到**目录**（会找目录下的 `soffice`）或**可执行文件**。显式配置了却不存在时，
+服务会直接判定为「缺少组件」并如实提示，**不会**偷偷改用自动找到的另一个 ——
+部署时路径写错却一直用的是别处版本，比直接报错难查得多。
+
+**验证装好了没**
+
+```bash
+curl http://127.0.0.1:8000/api/config | grep -o '"doc_conversion_available":[a-z]*'
+# {"doc_conversion_available":true} 表示已就绪
+```
+
+---
+
+## 可选组件（HEIC / OCR）
+
+这两项能力各自依赖一个**有额外负担**的组件，因此**刻意不放进 `requirements.txt`**，
+而是各自一个可选文件。不装的话服务照常启动、其余功能全部可用，只是能力矩阵里不会出现对应的格子，
+界面会**如实说明原因**，不会摆一个点下去必然失败的按钮。
+
+```bash
+cd backend
+pip install -r requirements-heic.txt   # HEIC
+pip install -r requirements-ocr.txt    # OCR（PDF→Word 的扫描件）
+```
+
+装完**不需要改配置**：重启服务即可。
+
+### HEIC
+
+**为什么是可选**：HEIC 的全部能力来自 `pillow-heif` —— **Pillow 12 本体一行 HEIC 代码都没有**
+（实测 `Image.OPEN` / `Image.SAVE` 里没有 HEIF，`registered_extensions()` 里没有 `.heic`，
+喂一个真实的 `ftypheic` 头只会得到 `UnidentifiedImageError`）。把它排除在基础依赖外有两个理由：
+
+1. **体积** —— wheel 自带 libheif，以及 libde265（解码，约 0.9 MB）与 libx265（编码，约 22 MB）。
+2. **许可** —— 见下。基础依赖应该是「装了就一定能用、且不附带额外义务」的那一组。
+
+**探测不是「包在不在」**。`pillow-heif` 把 libheif（容器解析）和编解码器**分开打包**，
+于是存在**三种**状态而不是两种：
+
+| 状态 | 解码 | 编码 | 矩阵里会发布什么 |
+| --- | --- | --- | --- |
+| 包不在 | ✗ | ✗ | 一条 HEIC 格子都没有；界面说明缺少组件 |
+| 只带 libde265 | ✓ | ✗ | **只发布解码方向**（`HEIC → 其它`），不出现任何 `其它 → HEIC` |
+| 两者都在 | ✓ | ✓ | 双向都发布 |
+
+只带解码器的构建能 `HEIC → JPG`，**不能** `JPG → HEIC`。「包在不在」回答不了「能不能编码」，
+所以探测会**真的各做一次**：读一张内置的 8×8 样张（测解码），再自己编一张 2×2 读回来（测编码）。
+代价是微秒级（实测整轮 < 5 ms），换来的是绝**不把一个点下去必然失败的 `JPG → HEIC` 摆在界面上**。
+
+> 探测用**真实样张**而不是「编一张再读回来」来测解码，是因为后者有个盲区：
+> 只带 libde265 的构建编不出东西，会把解码也误报成不可用 —— 而它其实解得开。
+
+**不可用时的行为**：`conversions[]` / `operations[]` / `matrix` 里一条 HEIC 都没有、`available` 如实为 `false`；
+首页 FAQ 的格式清单不含 HEIC（清单是从能力 API 现算的，不是手抄的）；图片工具页不显示不可用的 HEIC 操作并明确说明；
+上传 HEIC 并提交时任务**失败并给出中文说明**，不伪造成功、不产出一个改名的空文件；其余格式一个都不受影响。
+用户可见的提示里不含 Traceback、模块路径或 Python 异常名。
+
+**许可与分发（事实陈述，不是法律意见）**：`pillow-heif` 的 wheel 自带 libheif，而 libheif 在这份 wheel 里链了
+**libde265**（HEVC 解码器）与 **libx265**（HEVC 编码器）。上游许可以各自项目为准，此处只记录事实：
+
+- **libx265 是 GPLv2**。分发链接了 libx265 的二进制会触发 GPLv2 的义务。这一条对「把本服务打包分发」有影响，对「自己部署自己用」通常没有。
+- **HEVC 另有专利池**（Access Advance / Via LA 等）。专利许可与软件著作权许可是两件事，前者不因为代码是开源的而消失。
+
+本仓库**没有** LICENSE / NOTICE 体系，因此这里不做任何结论性判断。若要把本服务对外分发（尤其是商业分发）：
+
+> Requires project-specific legal review before commercial redistribution.
+
+**只想要解码方向**：**没有配置开关** —— 能力发布只看 `compressors.heif` 的 `_probe()` 返回值。
+要让矩阵只保留 `HEIC → 其它`，需要改代码：把 `_probe()` 里那段编码探测
+（真编一张 2×2 再读回来）去掉，让 `encode` 恒为 `False`。
+改完之后矩阵、界面与前端目标列表会**自动**同步，不需要动别的地方 —— 矩阵是从探测结果派生的，不是手写的。
+
+### OCR（PDF → Word 的扫描件）
+
+- 由 `services/ocr_service.py` 调用，语言默认 `chi_sim` + `eng`
+- **逐页串行**（约 2 秒/页），且有单飞锁与等锁上限（`FILETOOLS_PDF_TO_WORD_OCR_LOCK_WAIT`，默认 60 秒）
+- 单份 PDF 最多 OCR 30 页（`FILETOOLS_PDF_TO_WORD_MAX_OCR_PAGES`），超过的部分如实说明
+- 可以整个关掉：`FILETOOLS_OCR_DISABLED=1`，此时扫描件会如实提示需要 OCR 组件，而不是给一份空文档
+- **取消是协作式的**：正在跑的 OCR 停不下来，界面如实显示「已请求取消，正在等待当前文件处理完」
+
+---
+
+## 快速开始
+
+需要开**两个终端**，一个跑后端、一个跑前端。
+
+### 1. 启动后端
+
+```bash
+cd backend
+
+# 创建并激活虚拟环境
+python -m venv .venv
+# Windows (PowerShell)
+.\.venv\Scripts\Activate.ps1
+# macOS / Linux
+# source .venv/bin/activate
+
+# 安装依赖
+pip install -r requirements.txt
+
+# 可选：HEIC / OCR
+# pip install -r requirements-heic.txt
+# pip install -r requirements-ocr.txt
+
+# 启动服务（默认 http://127.0.0.1:8000）
+uvicorn main:app --reload --port 8000
+```
+
+启动成功后会看到：
+
+```text
+INFO:filetools:FileTools API v0.1.0 已启动（上传上限 50 MB，并发 5）
+INFO:     Uvicorn running on http://127.0.0.1:8000
+```
+
+- 接口文档（Swagger UI）：<http://127.0.0.1:8000/docs>
+- 健康检查：<http://127.0.0.1:8000/api/health>
+- 能力矩阵：<http://127.0.0.1:8000/api/conversion/capabilities>
+
+### 2. 启动前端
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+打开 <http://localhost:5173> 即可使用。
+
+前端开发服务器会把 `/api` 请求代理到 `http://127.0.0.1:8000`，因此前后端同源，不存在跨域问题。
+
+> 如果后端不在默认地址，启动前端前设置环境变量：
+> `VITE_BACKEND_URL=http://192.168.1.10:8000 npm run dev`
+
+### 3. 试一下
+
+#### 统一转换中心（推荐入口）
+
+1. 打开 <http://localhost:5173/convert>
+2. 拖进任意文件 —— **源格式是自动识别的，不用你选**
+3. 目标格式列表按 Recommended / Other formats 两级给出，全部来自后端能力矩阵
+4. 参数面板按目标格式自动裁剪（选 PNG 就没有质量滑杆，选 JPG 才有）
+5. 一次拖多个文件，结果自动打 ZIP
+
+#### 图片压缩
+
+1. 打开 <http://localhost:5173/image/compress>
+2. 把一张几 MB 的图片拖进上传区域
+3. 目标大小选「≤ 2 MB」，压缩质量选「平衡」
+4. 点「开始压缩」
+5. 查看压缩前后对比，点「下载文件」
+
+#### 格式转换 / 几何操作
+
+1. 打开 <http://localhost:5173/image/convert>，上传一张 HEIC（需装可选组件），目标格式选「JPG」
+2. 打开 <http://localhost:5173/image>，可以对图片做旋转 90° / 翻转 / 裁剪，再导出
+
+#### 尺寸调整
+
+1. 打开 <http://localhost:5173/image/resize>
+2. 上传一张 4032 × 3024 的照片，宽度改成 `1920`
+3. 高度会自动变成 `1440`（保持宽高比例已默认勾选）
+4. 点「开始调整」→ 下载结果
+
+#### 批量
+
+在上面任一页面一次选中多张图片（最多 50 张），结果会自动打包成 ZIP 下载。
+
+#### PDF 工具
+
+1. 打开 <http://localhost:5173/pdf>，六个 PDF 功能都在这里
+2. **图片转 PDF**：一次选中多张图片，拖动抓手调整顺序（第一张就是第一页），选好纸张和页边距，点「生成 PDF」
+3. **PDF 转图片**：上传一份 PDF，选 JPG 或 PNG，页面范围填 `1-3`，点「开始导出」→ 多于一页会打包成 `pdf_pages.zip`
+4. **PDF 合并**：选中几个 PDF，排好顺序，点「合并 PDF」→ 下载 `merged.pdf`
+5. **PDF 拆分**：上传后选「按范围拆分」，三行分别填 `1-5`、`6-10`、`11-20`，点「开始拆分」→ 得到 `part-01.pdf`、`part-02.pdf`、`part-03.pdf`
+6. **PDF 页面删除 / 提取**：上传后点缩略图选中页面（红色＝删除，蓝色＝提取），点「生成新的 PDF」
+7. **PDF 压缩**：上传扫描件类的 PDF，选「高压缩」，点「开始压缩」→ 看到「✓ 压缩完成」与节省百分比
+
+#### 文档转换
+
+1. 打开 <http://localhost:5173/doc>，四个文档转换功能都在这里
+2. **TXT 转 PDF**（不需要 LibreOffice，随时可试）：上传一个 `.txt`，字号填 `14`，页面大小选「A5」，方向选「横向」，点「开始转换」→ 下载得到的 PDF 就是 14 号字、A5 横排
+3. **Word 转 PDF**：上传一个 `.docx`，最大文件大小选「≤ 1 MB」，点「开始转换」→ 结果里会写明页数；如果压缩达不到 1 MB，会如实写出当前大小，**不会假装成功**
+4. **Excel 转 PDF**：上传一个多工作表的 `.xlsx`，结果里会写明一共导出了几张工作表、其中几张是隐藏的
+5. **PPT 转 PDF**：上传一个 `.pptx`，一页幻灯片对应 PDF 的一页
+
+> 没装 LibreOffice 时，第 3–5 步的页面顶部会直接提示「当前服务器缺少 Office 转换组件，请联系管理员。」
+> 并且开始按钮是禁用的。第 2 步不受影响。
+
+#### PDF → Word
+
+1. 打开 <http://localhost:5173/doc/pdf-to-word>
+2. 上传一份 **文字型** PDF → 直接得到可编辑的 `.docx`（不走 OCR）
+3. 换成一份 **扫描件** PDF → 页面会提示需要 OCR，并显示真实进度（约 2 秒/页）
+
+---
+
+## 生产模式部署
+
+前端构建产物可以被后端直接托管，这样只需要跑一个服务：
+
+```bash
+# 1. 构建前端
+cd frontend
+npm install
+npm run build          # 产物输出到 frontend/dist
+
+# 2. 启动后端（检测到 frontend/dist 存在时会自动挂载）
+cd ../backend
+pip install -r requirements.txt
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+然后访问 <http://localhost:8000> 即可。前端路由（如 `/convert`）刷新时也能正常打开。
+
+> 注意：`frontend/dist` 是在后端**启动时**检测的。如果后端已经在运行，构建完前端需要重启后端。
+>
+> `frontend/dist/` 在 `.gitignore` 里 —— 克隆仓库后要自己跑一次 `npm run build`。
+>
+> 要用文档转换的话，这台服务器上还得装 LibreOffice（见 [LibreOffice 安装要求](#libreoffice-安装要求)）。
+> 没装也不影响其它功能，那三个页面会明确提示缺少组件。
 
 ---
 
@@ -593,320 +907,6 @@ FileTools/
 
 单文件与批量走的是同一个 `useBatchTask`：它把文件交给后端、轮询任务快照（`services/taskRunner.ts`，500 ms）、
 把每个文件的状态渲染出来。文件数大于 1 时结果自动打包成 ZIP，等于 1 时直接给单个文件 —— 这条分支在同一个 hook 里。
-
----
-
-## 环境要求
-
-| 组件 | 版本 | 本项目验证环境 | 必需？ |
-| --- | --- | --- | --- |
-| Python | 3.10 及以上 | 3.14.5 | 必需 |
-| Node.js | 18 及以上 | 24.15.0 | 仅构建前端时需要 |
-| npm | 9 及以上 | 11.12.1 | 仅构建前端时需要 |
-| LibreOffice | 7.0 及以上 | 26.2.5 | **可选**，只有 Word / Excel / PPT 转 PDF 需要 |
-| pillow-heif | 1.8.0 | 已装 | **可选**，只有 HEIC 需要 |
-| rapidocr-onnxruntime | 1.2.3 | 已装 | **可选**，只有 PDF→Word 的扫描件 OCR 需要 |
-| Playwright | — | 已装 | 仅验收脚本需要 |
-
-> OCR 引擎用的是 **rapidocr-onnxruntime**（纯 pip 安装、自带中英文模型），不是 Tesseract ——
-> 换引擎只需要改 `services/ocr_service.py` 里的 `_load_engine`。
-
-### LibreOffice 安装要求
-
-只有 **Word / Excel / PowerPoint 转 PDF** 需要它。图片工具、PDF 工具、TXT 转 PDF 都不需要；
-没装的时候这三个页面会明确提示「当前服务器缺少 Office 转换组件，请联系管理员。」
-并禁用开始按钮，其余功能完全不受影响。
-
-**为什么必须是完整安装**：转换走的是无界面模式（headless），但需要 `soffice` 可执行文件
-**和**它依赖的过滤器组件（`program/` 下的 `*.so` / `*.dll`、`share/` 下的过滤器配置）。
-只拷一个 `soffice` 二进制是不行的。绝大多数发行版的官方包都是完整安装，照下面装即可。
-
-**Windows**
-
-```powershell
-winget install TheDocumentFoundation.LibreOffice
-# 或者从 https://www.libreoffice.org/download/ 下载 .msi 安装
-```
-
-默认装在 `C:\Program Files\LibreOffice\program\soffice.com`，本服务会自动找到它。
-
-**Linux（Debian / Ubuntu）**
-
-```bash
-sudo apt-get update && sudo apt-get install -y libreoffice --no-install-recommends
-```
-
-`--no-install-recommends` 会跳过一堆图形界面依赖，但**会一并跳过部分过滤器**。
-如果转换报「文件转换失败」，改用完整的 `sudo apt-get install -y libreoffice`。
-
-**Linux（RHEL / CentOS / Fedora）**
-
-```bash
-sudo dnf install -y libreoffice-headless libreoffice-writer libreoffice-calc libreoffice-impress
-```
-
-**Docker**
-
-```dockerfile
-FROM python:3.12-slim
-
-# LibreOffice 体积不小（约 400 MB），单独一层，改代码时不会重复下载
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libreoffice-writer libreoffice-calc libreoffice-impress \
-        fonts-noto-cjk \
-    && rm -rf /var/lib/apt/lists/*
-
-# 中文字体：没有它，中文文档会整篇变成方框
-# （fonts-noto-cjk 在上面已经装了；也可以挂载宿主机的字体目录）
-
-WORKDIR /app
-COPY backend/requirements.txt backend/
-RUN pip install --no-cache-dir -r backend/requirements.txt
-COPY backend/ backend/
-COPY frontend/dist/ frontend/dist/
-
-ENV FILETOOLS_LIBREOFFICE_PATH=/usr/bin/soffice
-EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "backend"]
-```
-
-> ⚠️ **这份 Dockerfile 没有在本项目环境中实测过**（开发机是 Windows，没有 Docker）。
-> 上面的包名与路径按官方文档写，但请以你自己构建的结果为准。
-> 特别是 **中文字体**：`python:*-slim` 镜像里一个中文字体都没有，
-> 不装 `fonts-noto-cjk` 的话中文 PDF 会全是方框。
-
-**指定路径**
-
-自动查找的顺序是：`FILETOOLS_LIBREOFFICE_PATH` → 常见安装位置 → `PATH` 里的 `soffice` / `libreoffice`。
-Windows 上优先 `soffice.com` 而不是 `soffice.exe`（两者是同一个启动器，区别只在 PE 的
-console-subsystem 位：`.com` 会阻塞并把输出交给我们，`.exe` 不会）。装在非常规位置时用环境变量指定：
-
-```bash
-FILETOOLS_LIBREOFFICE_PATH=/opt/libreoffice/program/soffice uvicorn main:app --port 8000
-```
-
-可以指到**目录**（会找目录下的 `soffice`）或**可执行文件**。显式配置了却不存在时，
-服务会直接判定为「缺少组件」并如实提示，**不会**偷偷改用自动找到的另一个 ——
-部署时路径写错却一直用的是别处版本，比直接报错难查得多。
-
-**验证装好了没**
-
-```bash
-curl http://127.0.0.1:8000/api/config | grep -o '"doc_conversion_available":[a-z]*'
-# {"doc_conversion_available":true} 表示已就绪
-```
-
----
-
-## 可选组件（HEIC / OCR）
-
-这两项能力各自依赖一个**有额外负担**的组件，因此**刻意不放进 `requirements.txt`**，
-而是各自一个可选文件。不装的话服务照常启动、其余功能全部可用，只是能力矩阵里不会出现对应的格子，
-界面会**如实说明原因**，不会摆一个点下去必然失败的按钮。
-
-```bash
-cd backend
-pip install -r requirements-heic.txt   # HEIC
-pip install -r requirements-ocr.txt    # OCR（PDF→Word 的扫描件）
-```
-
-装完**不需要改配置**：重启服务即可。
-
-### HEIC
-
-**为什么是可选**：HEIC 的全部能力来自 `pillow-heif` —— **Pillow 12 本体一行 HEIC 代码都没有**
-（实测 `Image.OPEN` / `Image.SAVE` 里没有 HEIF，`registered_extensions()` 里没有 `.heic`，
-喂一个真实的 `ftypheic` 头只会得到 `UnidentifiedImageError`）。把它排除在基础依赖外有两个理由：
-
-1. **体积** —— wheel 自带 libheif，以及 libde265（解码，约 0.9 MB）与 libx265（编码，约 22 MB）。
-2. **许可** —— 见下。基础依赖应该是「装了就一定能用、且不附带额外义务」的那一组。
-
-**探测不是「包在不在」**。`pillow-heif` 把 libheif（容器解析）和编解码器**分开打包**，
-于是存在**三种**状态而不是两种：
-
-| 状态 | 解码 | 编码 | 矩阵里会发布什么 |
-| --- | --- | --- | --- |
-| 包不在 | ✗ | ✗ | 一条 HEIC 格子都没有；界面说明缺少组件 |
-| 只带 libde265 | ✓ | ✗ | **只发布解码方向**（`HEIC → 其它`），不出现任何 `其它 → HEIC` |
-| 两者都在 | ✓ | ✓ | 双向都发布 |
-
-只带解码器的构建能 `HEIC → JPG`，**不能** `JPG → HEIC`。「包在不在」回答不了「能不能编码」，
-所以探测会**真的各做一次**：读一张内置的 8×8 样张（测解码），再自己编一张 2×2 读回来（测编码）。
-代价是微秒级（实测整轮 < 5 ms），换来的是绝**不把一个点下去必然失败的 `JPG → HEIC` 摆在界面上**。
-
-> 探测用**真实样张**而不是「编一张再读回来」来测解码，是因为后者有个盲区：
-> 只带 libde265 的构建编不出东西，会把解码也误报成不可用 —— 而它其实解得开。
-
-**不可用时的行为**：`conversions[]` / `operations[]` / `matrix` 里一条 HEIC 都没有、`available` 如实为 `false`；
-首页 FAQ 的格式清单不含 HEIC（清单是从能力 API 现算的，不是手抄的）；图片工具页不显示不可用的 HEIC 操作并明确说明；
-上传 HEIC 并提交时任务**失败并给出中文说明**，不伪造成功、不产出一个改名的空文件；其余格式一个都不受影响。
-用户可见的提示里不含 Traceback、模块路径或 Python 异常名。
-
-**许可与分发（事实陈述，不是法律意见）**：`pillow-heif` 的 wheel 自带 libheif，而 libheif 在这份 wheel 里链了
-**libde265**（HEVC 解码器）与 **libx265**（HEVC 编码器）。上游许可以各自项目为准，此处只记录事实：
-
-- **libx265 是 GPLv2**。分发链接了 libx265 的二进制会触发 GPLv2 的义务。这一条对「把本服务打包分发」有影响，对「自己部署自己用」通常没有。
-- **HEVC 另有专利池**（Access Advance / Via LA 等）。专利许可与软件著作权许可是两件事，前者不因为代码是开源的而消失。
-
-本仓库**没有** LICENSE / NOTICE 体系，因此这里不做任何结论性判断。若要把本服务对外分发（尤其是商业分发）：
-
-> Requires project-specific legal review before commercial redistribution.
-
-**只想要解码方向**：**没有配置开关** —— 能力发布只看 `compressors.heif` 的 `_probe()` 返回值。
-要让矩阵只保留 `HEIC → 其它`，需要改代码：把 `_probe()` 里那段编码探测
-（真编一张 2×2 再读回来）去掉，让 `encode` 恒为 `False`。
-改完之后矩阵、界面与前端目标列表会**自动**同步，不需要动别的地方 —— 矩阵是从探测结果派生的，不是手写的。
-
-### OCR（PDF → Word 的扫描件）
-
-- 由 `services/ocr_service.py` 调用，语言默认 `chi_sim` + `eng`
-- **逐页串行**（约 2 秒/页），且有单飞锁与等锁上限（`FILETOOLS_PDF_TO_WORD_OCR_LOCK_WAIT`，默认 60 秒）
-- 单份 PDF 最多 OCR 30 页（`FILETOOLS_PDF_TO_WORD_MAX_OCR_PAGES`），超过的部分如实说明
-- 可以整个关掉：`FILETOOLS_OCR_DISABLED=1`，此时扫描件会如实提示需要 OCR 组件，而不是给一份空文档
-- **取消是协作式的**：正在跑的 OCR 停不下来，界面如实显示「已请求取消，正在等待当前文件处理完」
-
----
-
-## 快速开始
-
-需要开**两个终端**，一个跑后端、一个跑前端。
-
-### 1. 启动后端
-
-```bash
-cd backend
-
-# 创建并激活虚拟环境
-python -m venv .venv
-# Windows (PowerShell)
-.\.venv\Scripts\Activate.ps1
-# macOS / Linux
-# source .venv/bin/activate
-
-# 安装依赖
-pip install -r requirements.txt
-
-# 可选：HEIC / OCR
-# pip install -r requirements-heic.txt
-# pip install -r requirements-ocr.txt
-
-# 启动服务（默认 http://127.0.0.1:8000）
-uvicorn main:app --reload --port 8000
-```
-
-启动成功后会看到：
-
-```text
-INFO:filetools:FileTools API v0.1.0 已启动（上传上限 50 MB，并发 5）
-INFO:     Uvicorn running on http://127.0.0.1:8000
-```
-
-- 接口文档（Swagger UI）：<http://127.0.0.1:8000/docs>
-- 健康检查：<http://127.0.0.1:8000/api/health>
-- 能力矩阵：<http://127.0.0.1:8000/api/conversion/capabilities>
-
-### 2. 启动前端
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-打开 <http://localhost:5173> 即可使用。
-
-前端开发服务器会把 `/api` 请求代理到 `http://127.0.0.1:8000`，因此前后端同源，不存在跨域问题。
-
-> 如果后端不在默认地址，启动前端前设置环境变量：
-> `VITE_BACKEND_URL=http://192.168.1.10:8000 npm run dev`
-
-### 3. 试一下
-
-#### 统一转换中心（推荐入口）
-
-1. 打开 <http://localhost:5173/convert>
-2. 拖进任意文件 —— **源格式是自动识别的，不用你选**
-3. 目标格式列表按 Recommended / Other formats 两级给出，全部来自后端能力矩阵
-4. 参数面板按目标格式自动裁剪（选 PNG 就没有质量滑杆，选 JPG 才有）
-5. 一次拖多个文件，结果自动打 ZIP
-
-#### 图片压缩
-
-1. 打开 <http://localhost:5173/image/compress>
-2. 把一张几 MB 的图片拖进上传区域
-3. 目标大小选「≤ 2 MB」，压缩质量选「平衡」
-4. 点「开始压缩」
-5. 查看压缩前后对比，点「下载文件」
-
-#### 格式转换 / 几何操作
-
-1. 打开 <http://localhost:5173/image/convert>，上传一张 HEIC（需装可选组件），目标格式选「JPG」
-2. 打开 <http://localhost:5173/image>，可以对图片做旋转 90° / 翻转 / 裁剪，再导出
-
-#### 尺寸调整
-
-1. 打开 <http://localhost:5173/image/resize>
-2. 上传一张 4032 × 3024 的照片，宽度改成 `1920`
-3. 高度会自动变成 `1440`（保持宽高比例已默认勾选）
-4. 点「开始调整」→ 下载结果
-
-#### 批量
-
-在上面任一页面一次选中多张图片（最多 50 张），结果会自动打包成 ZIP 下载。
-
-#### PDF 工具
-
-1. 打开 <http://localhost:5173/pdf>，六个 PDF 功能都在这里
-2. **图片转 PDF**：一次选中多张图片，拖动抓手调整顺序（第一张就是第一页），选好纸张和页边距，点「生成 PDF」
-3. **PDF 转图片**：上传一份 PDF，选 JPG 或 PNG，页面范围填 `1-3`，点「开始导出」→ 多于一页会打包成 `pdf_pages.zip`
-4. **PDF 合并**：选中几个 PDF，排好顺序，点「合并 PDF」→ 下载 `merged.pdf`
-5. **PDF 拆分**：上传后选「按范围拆分」，三行分别填 `1-5`、`6-10`、`11-20`，点「开始拆分」→ 得到 `part-01.pdf`、`part-02.pdf`、`part-03.pdf`
-6. **PDF 页面删除 / 提取**：上传后点缩略图选中页面（红色＝删除，蓝色＝提取），点「生成新的 PDF」
-7. **PDF 压缩**：上传扫描件类的 PDF，选「高压缩」，点「开始压缩」→ 看到「✓ 压缩完成」与节省百分比
-
-#### 文档转换
-
-1. 打开 <http://localhost:5173/doc>，四个文档转换功能都在这里
-2. **TXT 转 PDF**（不需要 LibreOffice，随时可试）：上传一个 `.txt`，字号填 `14`，页面大小选「A5」，方向选「横向」，点「开始转换」→ 下载得到的 PDF 就是 14 号字、A5 横排
-3. **Word 转 PDF**：上传一个 `.docx`，最大文件大小选「≤ 1 MB」，点「开始转换」→ 结果里会写明页数；如果压缩达不到 1 MB，会如实写出当前大小，**不会假装成功**
-4. **Excel 转 PDF**：上传一个多工作表的 `.xlsx`，结果里会写明一共导出了几张工作表、其中几张是隐藏的
-5. **PPT 转 PDF**：上传一个 `.pptx`，一页幻灯片对应 PDF 的一页
-
-> 没装 LibreOffice 时，第 3–5 步的页面顶部会直接提示「当前服务器缺少 Office 转换组件，请联系管理员。」
-> 并且开始按钮是禁用的。第 2 步不受影响。
-
-#### PDF → Word
-
-1. 打开 <http://localhost:5173/doc/pdf-to-word>
-2. 上传一份 **文字型** PDF → 直接得到可编辑的 `.docx`（不走 OCR）
-3. 换成一份 **扫描件** PDF → 页面会提示需要 OCR，并显示真实进度（约 2 秒/页）
-
----
-
-## 生产模式部署
-
-前端构建产物可以被后端直接托管，这样只需要跑一个服务：
-
-```bash
-# 1. 构建前端
-cd frontend
-npm install
-npm run build          # 产物输出到 frontend/dist
-
-# 2. 启动后端（检测到 frontend/dist 存在时会自动挂载）
-cd ../backend
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000
-```
-
-然后访问 <http://localhost:8000> 即可。前端路由（如 `/convert`）刷新时也能正常打开。
-
-> 注意：`frontend/dist` 是在后端**启动时**检测的。如果后端已经在运行，构建完前端需要重启后端。
->
-> `frontend/dist/` 在 `.gitignore` 里 —— 克隆仓库后要自己跑一次 `npm run build`。
->
-> 要用文档转换的话，这台服务器上还得装 LibreOffice（见 [LibreOffice 安装要求](#libreoffice-安装要求)）。
-> 没装也不影响其它功能，那三个页面会明确提示缺少组件。
 
 ---
 
