@@ -1,0 +1,21 @@
+# 运行依赖（版本为 Python 3.14 下实测通过的组合）
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+python-multipart==0.0.32
+Pillow==12.3.0
+# PDF 处理：读取、渲染、合并拆分、压缩都用它，不额外引入第二个 PDF 引擎
+PyMuPDF==1.28.2
+# PDF → Word：生成 DOCX。不手搓 OOXML，关系表/内容类型表交给它保证
+python-docx==1.2.0
+# HEIC / HEIF **不在这里** —— 它是可选依赖，见 requirements-heic.txt。
+#
+# Pillow 12 本体没有任何 HEIC 代码，HEIC 能力全部来自可选的 ``pillow-heif``。
+# 它不进基础依赖有两个理由，两条都写在那份文件里：
+#
+#   1. 体积（wheel 自带 libheif + libx265，20 MB 以上）；
+#   2. 许可（libx265 是 GPLv2，HEVC 另有专利池）。
+#
+# 不装它服务照常启动，``compressors/heif.py`` 探测不到就不发布 HEIC 能力，
+# 其余格式一个都不受影响。装它：
+#
+#     pip install -r requirements-heic.txt

@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+*.local
+# 构建产物：由 `npm run build` 生成，后端直接从这份 dist 托管。
+# 不进版本库，克隆后要跑一次构建。
+frontend/dist/
+
+# 环境变量
+.env
+.env.*
+!.env.example
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+
+# 验收脚本的产物
+# scripts/verify_phase*.py 每次跑都会重写这些报告，它们是输出不是源码。
+# 报告留在本机随时可看，但不提交 —— 否则每跑一次回归就产生一次 diff。
+scripts/*_report.txt
+# 历史验收的临时工作目录（下载的产物、生成的素材、解开的 zip）
+.accept-work/

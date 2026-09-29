@@ -1,0 +1,29 @@
+# OCR 依赖（第六阶段 A）——**可选安装**。
+#
+# 没装这份依赖，服务照样能跑：文字版 PDF → Word 完全不受影响，
+# 只是 /api/config 会报 ocr_available=false，扫描版 PDF 返回
+# OCR_UNAVAILABLE（503）。所以这些包刻意不放进 requirements.txt ——
+# 它们的体积（onnxruntime + opencv 加起来 200 MB 上下）不该压在所有
+# 部署上，尤其是根本用不到扫描件的那些。
+#
+#     pip install -r requirements-ocr.txt
+#
+# 版本为 Python 3.14 / win_amd64 下实测通过的组合。
+#
+# 引擎选的是 rapidocr-onnxruntime 而不是 Tesseract：
+# 它是纯 pip 安装、自带中英文模型，不需要另外跑系统级安装程序。
+# 换引擎只需要改 services/ocr_service.py 里的 _load_engine。
+rapidocr-onnxruntime==1.2.3
+# rapidocr 的推理后端。Windows 上自带 DirectML 之外的 CPU 执行提供者，
+# 不需要额外的驱动。
+onnxruntime==1.30.0
+# 下面这几个是 rapidocr 的连带依赖。显式钉住版本，免得某天
+# 上游发新版把识别结果改掉 —— OCR 的输出直接进用户文档，
+# 一次静默升级就够让一批测试变红、让一批文档认错字。
+numpy==2.5.3
+opencv-python==5.0.0.93
+shapely==2.1.2
+pyclipper==1.4.0
+protobuf==7.36.2
+flatbuffers==25.12.19
+six==1.17.0
