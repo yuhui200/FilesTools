@@ -188,7 +188,10 @@ pip install -r requirements-ocr.txt    # OCR（PDF→Word 的扫描件）
 - **libx265 是 GPLv2**。分发链接了 libx265 的二进制会触发 GPLv2 的义务。这一条对「把本服务打包分发」有影响，对「自己部署自己用」通常没有。
 - **HEVC 另有专利池**（Access Advance / Via LA 等）。专利许可与软件著作权许可是两件事，前者不因为代码是开源的而消失。
 
-本仓库**没有** LICENSE / NOTICE 体系，因此这里不做任何结论性判断。若要把本服务对外分发（尤其是商业分发）：
+本仓库自身以 **AGPL-3.0** 发布（见[许可证](#许可证)），但**这不解决上面两条** ——
+「本仓库的代码用什么许可」与「它链接的第三方编解码器是什么许可」是两件独立的事：
+AGPL-3.0 不会让 libx265 的 GPLv2 义务消失，也不会让 HEVC 的专利许可消失。
+因此这里仍不做任何结论性判断。若要把本服务对外分发（尤其是商业分发）：
 
 > Requires project-specific legal review before commercial redistribution.
 
@@ -753,6 +756,15 @@ GET  /api/download/{job_id} → 200 结果文件（一次性，下载后立即�
 
 ```text
 FileTools/
+├── Dockerfile                      # 单镜像部署（python:3.14-slim + LibreOffice）。**未实测**
+├── docker-compose.yml              # 全仓库唯一一处 .env 会被真正读取的地方（env_file）。**未实测**
+├── .dockerignore                   # 防止 COPY 把 Windows 的 .venv 拖进 Linux 镜像
+├── .env.example                    # 全部 65 个 FILETOOLS_* 变量清单（后端进程**不读** .env）
+├── .gitattributes / .editorconfig / .nvmrc   # 换行符、缩进、Node 版本
+├── .github/workflows/ci.yml        # CI：pytest + 前端构建。**未在 GitHub 上跑过**
+├── README.md                       # 本文
+├── SECURITY.md                     # 漏洞上报渠道 +「本项目没有认证」的部署警告
+├── LICENSE                         # AGPL-3.0（为什么不是 MIT，见下面「许可证」一节）
 ├── backend/
 │   ├── main.py                     # FastAPI 入口：中间件、异常处理、路由挂载、静态资源托管
 │   ├── config.py                   # 全部可调参数（支持环境变量覆盖）
