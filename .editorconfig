@@ -1,0 +1,32 @@
+# 编辑器约定。目的只有一个：别让换行符、编码、缩进这类与内容无关的差异
+# 混进 diff —— 上一个提交里 Dockerfile / .dockerignore / ci.yml 就因为
+# LF 与 CRLF 报过警告，那本不该是提交信息里要解释的事。
+#
+# 注意：这个文件只是**约定**，不是强制。仓库里没有接 prettier / black /
+# ruff 之类的格式化工具，所以它不会自动改写任何东西，只在你保存文件时生效。
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+# 全仓库已核对：0 处行尾空白，没有任何一行靠行尾空格实现换行，
+# 所以打开裁剪是安全的，不会改到任何既有文件的内容。
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{ts,tsx,js,jsx,json,css,html}]
+indent_size = 2
+
+[*.{yml,yaml}]
+indent_size = 2
+
+[*.md]
+# Markdown 里行尾两个空格是有意义的硬换行。本仓库目前一处都没用（已核对），
+# 但这里仍然放开 —— 写文档时不该被编辑器悄悄改掉。
+trim_trailing_whitespace = false
+
+[*.{bat,cmd}]
+end_of_line = crlf

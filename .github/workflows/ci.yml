@@ -54,9 +54,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 版本从仓库根的 .nvmrc 读，不再写死在这里 —— 免得 CI 的 Node 版本
+      # 和本地 nvm/fnm 用的对不上，出现「本地能过 CI 不过」这种最难查的分歧。
       - uses: actions/setup-node@v4
         with:
-          node-version: "24"
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 

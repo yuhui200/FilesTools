@@ -1,0 +1,43 @@
+# docker compose 的一体化运行配置。
+#
+# ⚠️ 未实测：和 Dockerfile 一样，这台开发机没有 Docker，这份文件没有被真正
+#    `docker compose up` 跑过。首次使用请以你的运行结果为准。
+#
+# 用法：
+#   1) 前端要先构建（镜像里不装 Node）：
+#        cd frontend && npm install && npm run build && cd ..
+#   2) 建一份 .env —— 只写你要覆盖的那几行，见下面的说明：
+#        cp .env.example .env
+#   3) 起服务：
+#        docker compose up --build
+#
+# ⚠️ 这是**整个仓库里唯一一处 .env 会真的被读取的地方**。
+#    后端进程自己不读 .env（backend/config.py 用的是 os.environ.get()），
+#    是 compose 读了它、再按 env_file 注进容器的环境变量 —— 后端只是
+#    恰好从环境变量里读到了值。没有 compose 时，就老老实实 export / 用
+#    systemd 的 Environment= / docker run -e。
+
+services:
+  filetools:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: filetools:latest
+    container_name: filetools
+    ports:
+      - "8000:8000"
+
+    # ⚠️ env_file 会把 .env 里**写着的每一个变量**都注入成容器环境变量。
+    #    所以别把 .env.example 整个复制过来就不管了：那等于把 65 个变量
+    #    全部钉死在今天的默认值上，以后程序改了默认值也不会跟着变。
+    #    只保留你要改的那几行，其余删掉 —— 删掉 = 用程序内置默认值。
+    #
+    #    .env 不存在时 compose 会直接报错退出（这是好事，比悄悄用默认值好查）。
+    env_file:
+      - .env
+
+    restart: unless-stopped
+
+    # 优雅关机：后端自己的 FILETOOLS_SHUTDOWN_GRACE 默认 10 秒，
+    # 这里留够余量让在跑的任务收尾，别让 compose 到点直接 SIGKILL。
+    stop_grace_period: 30s

@@ -88,21 +88,30 @@ sudo dnf install -y libreoffice-headless libreoffice-writer libreoffice-calc lib
 
 **Docker**
 
-仓库根目录有一份可直接用的 [`Dockerfile`](Dockerfile)，配套的 `.dockerignore`
-也在（**别删** —— 没有它，`COPY backend/ backend/` 会把开发机上的
+仓库根目录有一份可直接用的 [`Dockerfile`](Dockerfile) 和一份
+[`docker-compose.yml`](docker-compose.yml)，配套的 `.dockerignore` 也在
+（**别删** —— 没有它，`COPY backend/ backend/` 会把开发机上的
 `backend/.venv` 整个拷进 Linux 镜像）。
 
 ```bash
 # 1. 先构建前端：镜像里不装 Node，dist 必须在宿主机生成
 cd frontend && npm install && npm run build && cd ..
 
-# 2. 构建并运行
+# 2a. 用 compose
+#     注意：这是整个仓库里唯一一处 .env 会真的被读取的地方 ——
+#     是 compose 读了它再注入成容器环境变量，后端进程自己并不读 .env。
+#     .env 里只保留你要改的那几行，其余删掉（删掉 = 用程序内置默认值），
+#     别把 .env.example 整个复制过来 —— 那会把 65 个默认值全钉死。
+cp .env.example .env
+docker compose up --build
+
+# 2b. 或者不用 compose
 docker build -t filetools .
 docker run --rm -p 8000:8000 filetools
 ```
 
-> ⚠️ **那份 Dockerfile 没有在本项目环境中实测过**（开发机是 Windows，没有 Docker）。
-> 包名与路径按官方文档写，请以你自己构建的结果为准。
+> ⚠️ **Dockerfile 与 docker-compose.yml 都没有在本项目环境中实测过**
+> （开发机是 Windows，没有 Docker）。包名与路径按官方文档写，请以你自己构建的结果为准。
 > 特别是 **中文字体**：`python:*-slim` 镜像里一个中文字体都没有，
 > 不装 `fonts-noto-cjk` 的话中文 PDF 会全是方框。
 
@@ -1520,6 +1529,10 @@ LibreOffice **无法指定输出体积**，只能转完再压。所以流程是�
 > 变量要通过 `export` / systemd 的 `Environment=` / `docker run -e` 真正注入。
 > 仓库根目录的 [`.env.example`](.env.example) 是一张**清单**（列全了 65 个变量与
 > 内置默认值），不是一份会被加载的配置。
+>
+> **唯一的例外是 `docker compose`**：[`docker-compose.yml`](docker-compose.yml)
+> 里配了 `env_file: .env`，compose 会读仓库根目录的 `.env` 并把它注入成容器环境变量。
+> 换句话说 `.env` 生效的从来不是后端，是 compose。
 
 ### 上传与批量
 
@@ -1632,6 +1645,19 @@ LibreOffice **无法指定输出体积**，只能转完再压。所以流程是�
 | --- | --- | --- |
 | `VITE_API_BASE_URL` | 空（相对路径） | 后端地址。前后端分开部署时设置 |
 | `VITE_BACKEND_URL` | `http://127.0.0.1:8000` | 仅供 `npm run dev` 的代理使用 |
+
+这两个变量的**生效机制不一样，别想当然**（已实测）：
+
+- `VITE_API_BASE_URL` 由前端代码通过 `import.meta.env` 读取，写在
+  `frontend/.env` 里**有效**，构建时会被静态替换进产物。
+- `VITE_BACKEND_URL` 由 `vite.config.ts` 通过 `process.env` 读取，而 Vite
+  **不会**把 `.env` 的值灌进 `process.env` —— 所以写在 `frontend/.env` 里是
+  **静默失效**的。实测：写 `VITE_BACKEND_URL=http://probe.invalid:9999`，
+  解析出的代理 target 仍是兜底的 `http://127.0.0.1:8000`，且不报任何错。
+  要改它只能在命令行上设：`VITE_BACKEND_URL=http://192.168.1.10:8000 npm run dev`。
+
+`frontend/` 下另有一份 [`.env.example`](frontend/.env.example)，把这两条也写在了那里
+（Vite 只从**前端项目目录**读 `.env`，仓库根目录的 `.env` 与它无关）。
 
 ---
 

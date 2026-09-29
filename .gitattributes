@@ -1,19 +1,28 @@
 # 换行符策略。
 #
-# 为什么要这个文件：开发机是 Windows，Git 开着 core.autocrlf=true，
-# 克隆下来的文本文件都是 CRLF。对下面这几类文件 CRLF 会真的出问题：
+# 为什么要这个文件：开发机是 Windows，Git 开着 core.autocrlf=true。
+# 但那是**每个克隆者自己机器上的设置** —— 靠它来保证换行符一致，
+# 等于把仓库的一致性交给别人的配置。下面的规则写进仓库本身，谁克隆都一样。
+#
+# 事实核对：`git ls-files --eol` 显示索引里 122 个 .py、41 个 .tsx、25 个 .ts
+# 等全部文本文件都已经是 i/lf，所以加上 `* text=auto` 之后
+# `git add --renormalize .` 是**零 diff** —— 这不是一次大规模改写，
+# 只是把已经成立的事实写成规则。
+
+# 默认：按内容自动识别文本，仓库里统一存 LF
+*               text=auto
+
+# 下面几类必须显式锁 LF，不能只靠默认：
 #   - Dockerfile：续行符 `\` 后面若跟着 \r，部分构建器会报解析错误；
 #   - *.sh：CRLF 的 shebang 在 Linux 上直接 `bad interpreter`；
-#   - *.yml / *.toml：多数解析器容忍，但没有理由冒这个险。
-# 所以显式锁成 LF，和操作系统无关。
-#
-# 刻意**不**加 `* text=auto`：那会让所有既有文件进入待重新规范化状态，
-# 产生一次与本次改动无关的全量 diff。这里只列真正需要的后缀。
-
+#   - *.yml / *.toml：多数解析器容忍 CRLF，但没有理由冒这个险。
 Dockerfile      text eol=lf
 .dockerignore   text eol=lf
 .env.example    text eol=lf
 .gitattributes  text eol=lf
+.editorconfig   text eol=lf
+# .nvmrc 尤其重要：CRLF 会让 nvm 读到 "24\r" 这种版本号，直接解析失败
+.nvmrc          text eol=lf
 
 *.sh            text eol=lf
 *.yml           text eol=lf
