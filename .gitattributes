@@ -1,0 +1,40 @@
+# 换行符策略。
+#
+# 为什么要这个文件：开发机是 Windows，Git 开着 core.autocrlf=true，
+# 克隆下来的文本文件都是 CRLF。对下面这几类文件 CRLF 会真的出问题：
+#   - Dockerfile：续行符 `\` 后面若跟着 \r，部分构建器会报解析错误；
+#   - *.sh：CRLF 的 shebang 在 Linux 上直接 `bad interpreter`；
+#   - *.yml / *.toml：多数解析器容忍，但没有理由冒这个险。
+# 所以显式锁成 LF，和操作系统无关。
+#
+# 刻意**不**加 `* text=auto`：那会让所有既有文件进入待重新规范化状态，
+# 产生一次与本次改动无关的全量 diff。这里只列真正需要的后缀。
+
+Dockerfile      text eol=lf
+.dockerignore   text eol=lf
+.env.example    text eol=lf
+.gitattributes  text eol=lf
+
+*.sh            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.toml          text eol=lf
+
+# Windows 专用脚本反过来，必须 CRLF
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+# 二进制，一律不做任何转换
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.webp          binary
+*.ico           binary
+*.pdf           binary
+*.doc           binary
+*.xls           binary
+*.ppt           binary
+*.docx          binary
+*.xlsx          binary
+*.pptx          binary

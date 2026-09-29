@@ -88,31 +88,21 @@ sudo dnf install -y libreoffice-headless libreoffice-writer libreoffice-calc lib
 
 **Docker**
 
-```dockerfile
-FROM python:3.12-slim
+仓库根目录有一份可直接用的 [`Dockerfile`](Dockerfile)，配套的 `.dockerignore`
+也在（**别删** —— 没有它，`COPY backend/ backend/` 会把开发机上的
+`backend/.venv` 整个拷进 Linux 镜像）。
 
-# LibreOffice 体积不小（约 400 MB），单独一层，改代码时不会重复下载
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        libreoffice-writer libreoffice-calc libreoffice-impress \
-        fonts-noto-cjk \
-    && rm -rf /var/lib/apt/lists/*
+```bash
+# 1. 先构建前端：镜像里不装 Node，dist 必须在宿主机生成
+cd frontend && npm install && npm run build && cd ..
 
-# 中文字体：没有它，中文文档会整篇变成方框
-# （fonts-noto-cjk 在上面已经装了；也可以挂载宿主机的字体目录）
-
-WORKDIR /app
-COPY backend/requirements.txt backend/
-RUN pip install --no-cache-dir -r backend/requirements.txt
-COPY backend/ backend/
-COPY frontend/dist/ frontend/dist/
-
-ENV FILETOOLS_LIBREOFFICE_PATH=/usr/bin/soffice
-EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--app-dir", "backend"]
+# 2. 构建并运行
+docker build -t filetools .
+docker run --rm -p 8000:8000 filetools
 ```
 
-> ⚠️ **这份 Dockerfile 没有在本项目环境中实测过**（开发机是 Windows，没有 Docker）。
-> 上面的包名与路径按官方文档写，但请以你自己构建的结果为准。
+> ⚠️ **那份 Dockerfile 没有在本项目环境中实测过**（开发机是 Windows，没有 Docker）。
+> 包名与路径按官方文档写，请以你自己构建的结果为准。
 > 特别是 **中文字体**：`python:*-slim` 镜像里一个中文字体都没有，
 > 不装 `fonts-noto-cjk` 的话中文 PDF 会全是方框。
 
@@ -1525,6 +1515,12 @@ LibreOffice **无法指定输出体积**，只能转完再压。所以流程是�
 
 全部配置集中在 `backend/config.py`，可以通过环境变量覆盖。
 
+> ⚠️ **本项目不读取 `.env` 文件**。`backend/config.py` 用的是 `os.environ.get()`，
+> 依赖里也没有 `python-dotenv` —— 把 `.env` 放在仓库根目录对程序没有任何影响。
+> 变量要通过 `export` / systemd 的 `Environment=` / `docker run -e` 真正注入。
+> 仓库根目录的 [`.env.example`](.env.example) 是一张**清单**（列全了 65 个变量与
+> 内置默认值），不是一份会被加载的配置。
+
 ### 上传与批量
 
 | 环境变量 | 默认值 | 说明 |
@@ -1557,12 +1553,12 @@ LibreOffice **无法指定输出体积**，只能转完再压。所以流程是�
 | `FILETOOLS_QUEUE_WORKERS` | `2` | default 池并发 |
 | `FILETOOLS_IMAGE_TIMEOUT` | `120` | 图片池兜底超时（秒） |
 | `FILETOOLS_PDF_TIMEOUT` | `180` | PDF 池兜底超时（秒） |
-| `FILETOOLS_OFFICE_POOL_TIMEOUT` | `180` | Office 池兜底超时（秒） |
+| `FILETOOLS_OFFICE_POOL_TIMEOUT` | `120` | Office 池兜底超时（秒）。**生效值是 180** —— 兜底是下限，见下注 |
 | `FILETOOLS_DEFAULT_ITEM_TIMEOUT` | `120` | 其余池的兜底超时（秒） |
-| `FILETOOLS_TASK_TIMEOUT_AUTO_RETRY` | — | 超时任务是否自动重试 |
-| `FILETOOLS_TASK_MAX_AUTO_RETRIES` | — | 自动重试次数上限 |
-| `FILETOOLS_WORKER_WATCHDOG_INTERVAL` | — | 看门狗扫描间隔（秒） |
-| `FILETOOLS_WORKER_LOST_GRACE` | — | 判定 worker 丢失的宽限（秒） |
+| `FILETOOLS_TASK_TIMEOUT_AUTO_RETRY` | `0`（关） | 超时任务是否自动重试 |
+| `FILETOOLS_TASK_MAX_AUTO_RETRIES` | `1` | 自动重试次数上限 |
+| `FILETOOLS_WORKER_WATCHDOG_INTERVAL` | `5` | 看门狗扫描间隔（秒） |
+| `FILETOOLS_WORKER_LOST_GRACE` | `30` | 判定 worker 丢失的宽限（秒） |
 | `FILETOOLS_PRIORITY_AGING_SECONDS` | `60` | 优先级老化：等多久提升一档 |
 | `FILETOOLS_PRIORITY_AGING_STEPS` | `2` | 优先级最多提升几档 |
 | `FILETOOLS_SHUTDOWN_GRACE` | `10` | 优雅关机的等待秒数 |
@@ -1769,6 +1765,21 @@ npm run typecheck
 npm run build
 ```
 
+### CI 覆盖什么
+
+`.github/workflows/ci.yml` 在 push 到 `main` 与每个 PR 上跑两件事：后端
+`pytest -o addopts= -q`，前端 `npm run build`（脚本本身含 `tsc --noEmit`）。
+
+CI 里**刻意不跑** `scripts/verify_phase*.py` —— 那一批要真实 Chromium、要 LibreOffice、
+要一个常驻的后端进程，12 步串行跑满约 15 分钟，而且必须串行（并发跑必然假红）。
+它们属于发布前的真机验收，不属于 PR 门禁。
+
+同样地，CI runner 上没有 LibreOffice、也没有 OCR 组件，所以带 `@requires_soffice` /
+`@requires_ocr` 的用例在 CI 上是 **skip**。**CI 全绿不等于 Office 转换与 OCR 被验证过** ——
+那两样只有在装了组件的机器上跑完整回归才算数。
+
+> ⚠️ 这份工作流没有在 GitHub 上实测过（开发机不出网）。
+
 ### 真实浏览器 / 真机验收
 
 各阶段都有一份**独立于 pytest** 的验收脚本，用真实 Chromium（Playwright）或真实后端跑完整流程，
@@ -1837,7 +1848,9 @@ python scripts/verify_phase10.py
 12. **看门狗击杀 + 自动重试路径上会重复执行一次重活**（对纯 CPU 的转换意味着浪费一次算力，不是错误结果）。
 13. **`_ENGINE_LOCK` 的获取是无界的**：极端情况下一个卡死的转换会让后续排队等下去（看门狗最终会处理，但等待期间是阻塞的）。
 14. **HTML → PDF 只允许内联资源**：含外链图片的 HTML 转出来会缺图（如实提示，不是 bug）。
-15. **Docker 部署说明未经实测**：开发机是 Windows，没有 Docker。
+15. **Docker 部署与 CI 工作流都未经实测**：开发机是 Windows，没有 Docker、也不出网。
+    仓库根目录的 `Dockerfile` / `.dockerignore` 与 `.github/workflows/ci.yml`
+    是按官方文档与本地已验证的命令写的，首次使用请以你自己的构建 / 首次 CI 运行结果为准。
 16. **图片池的聚合并发倍数在本机约 1.5×，不是 2×** —— 图片处理有相当一部分卡在 CPython 的 GIL 上。用受 GIL 限制的负载去要求并发收益，考的是解释器而不是队列。
 17. **LibreOffice 的 profile 目录不会被自动回收**（`office-converter-profile-*` 刻意不含 `filetools` 前缀，免得被孤儿清理误删）。
 18. **PDF 结果没有内联缩略图**（预览端点只服务浏览器原生能解的图片格式），PDF 照样能下载。

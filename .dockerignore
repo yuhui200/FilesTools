@@ -1,0 +1,55 @@
+# 构建镜像时排除的东西。
+#
+# ⚠️ 这个文件不是可选项：没有它，`COPY backend/ backend/` 会把开发机上的
+#    backend/.venv（Windows 的二进制 wheel，几百 MB）整个拷进 Linux 镜像，
+#    不但体积爆炸，还会让镜像里的 import 解析到 Windows 的 .pyd。
+#    同理 node_modules 与 __pycache__ 也必须排掉。
+
+# --- 依赖与缓存 ---
+backend/.venv/
+venv/
+node_modules/
+**/node_modules/
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- 前端：镜像里只需要构建产物 frontend/dist ---
+frontend/src/
+frontend/public/
+frontend/index.html
+frontend/vite.config.ts
+frontend/tsconfig.json
+frontend/tailwind.config.js
+frontend/postcss.config.js
+frontend/package.json
+frontend/package-lock.json
+
+# --- 测试、脚本、验收产物：运行期用不到 ---
+backend/tests/
+scripts/
+.accept-work/
+scripts/*_report.txt
+
+# --- 版本控制与本机配置 ---
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+.claude/
+.env
+.env.local
+*.log
+
+# --- 文档与许可证不进运行镜像 ---
+# 注：Dockerfile 只 COPY backend/ 与 frontend/dist/ 两处，所以下面这些**根目录**
+# 条目当前其实不会命中，写在这里是为了将来有人改成 `COPY . .` 时不至于把文档、
+# 许可证和 .env 一起打进镜像。
+README.md
+LICENSE
+Dockerfile
+.dockerignore
+docker-compose.yml
