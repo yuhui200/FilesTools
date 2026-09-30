@@ -191,6 +191,12 @@ export function ConversionTaskRow({
               {formatBytes(result.size)}
             </span>
           )}
+          {/* 窄屏把下载按钮抬到 44px。抬高度用的是 ``min-h`` 这一档而**不是**给
+              ``h-11`` 加 ``max-sm`` 前缀：``Button`` 是裸 join 类名、没有
+              tailwind-merge，后者能否盖住 ``SIZES.sm`` 里的 ``h-9`` 取决于两条规则
+              谁先谁后；``min-height`` 在盒模型里永远压过 ``height``，与顺序无关。
+              这是这一行唯一**拿到结果**的入口，不该比同卡片里的整批下载按钮更难按。
+              桌面维持 36px 的紧凑密度。 */}
           {taken ? (
             <span className="text-xs text-slate-400">已取走</span>
           ) : (
@@ -200,6 +206,7 @@ export function ConversionTaskRow({
               loading={downloading}
               icon={<IconDownload className="h-4 w-4" />}
               onClick={() => onDownload(task.task_id, result.download_url, result.filename)}
+              className="max-sm:min-h-11"
             >
               下载
             </Button>
@@ -207,14 +214,15 @@ export function ConversionTaskRow({
         </div>
       )}
 
-      {/* 重试：只对失败项开放，且服务端说能重试才给按钮（§十六） */}
+      {/* 重试：只对失败项开放，且服务端说能重试才给按钮（§十六）。
+          和「下载」同理 —— 失败项上这是唯一能拿到结果的操作，窄屏同样抬到 44px。 */}
       {task.status === 'failed' && task.can_retry && (
         <Button
           size="sm"
           variant="secondary"
           loading={retrying}
           onClick={() => onRetry(task.task_id)}
-          className="shrink-0"
+          className="shrink-0 max-sm:min-h-11"
         >
           重试
         </Button>
