@@ -165,8 +165,16 @@ jobs:
 
       # -o addopts= 是必须的：pytest.ini 里写了 addopts = -q，
       # 不加这个覆盖就没法在命令行上再给别的参数。
-      # -rs 把跳过原因打出来：OCR 的用例在 runner 上会跳过，
-      # 「全绿」必须和「跳了多少、为什么跳」一起读（见文件头的说明）。
+      #
+      # ⚠️ 必须是 -rfEs，**不能只写 -rs**。`-r` 是**替换**而不是追加：
+      #    只写 -rs 会把 pytest 默认的 -rfE 顶掉，短摘要里就只剩 SKIPPED、
+      #    一条 FAILED 都没有 —— 而下面那段正是靠 FAILED 行把用例名带出去的。
+      #    第三次跑（9437379）就是这么瞎掉的：注解里除了官方那句 exit 1
+      #    什么都没有（那是本文件第一次带上诊断通道，等于当场失效）。
+      #    实测（同一份含失败与跳过的用例）：
+      #        -q -rs    → 短摘要里 0 条 FAILED 行
+      #        -q -rfEs  → 1 条 FAILED 行
+      #    f=失败 E=错误 s=跳过，三样都要：跳过原因与失败原因一起读才不误导。
       #
       # 输出改成先落盘再转发，是为了**红的时候能把失败用例名带出去**：
       # 日志正文下载要仓库管理员权限，而下面两条通道不用 ——
@@ -180,24 +188,38 @@ jobs:
         run: |
           LOG="$RUNNER_TEMP/pytest.log"
           set +e
-          python -m pytest -o addopts= -q -rs > "$LOG" 2>&1
+          python -m pytest -o addopts= -q -rfEs > "$LOG" 2>&1
           code=$?
 
           if [ "$code" -ne 0 ]; then
-            FAILED=$(grep -E '^(FAILED|ERROR)' "$LOG" | head -20)
+            LIST=$(grep -E '^(FAILED|ERROR)' "$LOG")
+            TOTAL=$(printf '%s' "$LIST" | grep -c . || true)
 
-            if [ -n "$FAILED" ]; then
-              # 消息里的 % 要转义，否则工作流命令会把它当成转义序列的开头。
-              while IFS= read -r line; do
-                echo "::error title=pytest 失败::$(printf '%s' "$line" | sed 's/%/%25/g')"
-              done <<< "$FAILED"
+            # 兜底：万一又变成一条 FAILED 都没有（参数被改回去、pytest 换了
+            # 输出格式……），也不能像 2026-10-04 那次一样只留一句 exit 1 ——
+            # 那等于这一跑白跑。宁可多送几行原文。
+            if [ -z "$LIST" ]; then
+              echo "::warning title=pytest 没有 FAILED 行::短摘要里一条 FAILED/ERROR 都没有，改为发送日志末尾原文"
+              LIST=$(tail -12 "$LOG")
+              TOTAL="?"
+            fi
+
+            # 逐条发，但**只发前 8 条**：注解在 Actions 界面上能显示的条数
+            # 有上限（官方那页没写明数字），失败一多就会溢出。溢出时必须让
+            # 「还有更多条」这件事本身看得见，否则又会退回「只知道红了、
+            # 不知道红在哪」——下面那一条就是说这个的。
+            printf '%s\n' "$LIST" | head -8 | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error title=pytest 失败::$(printf '%s' "$line" | sed 's/%/%25/g')"
+            done
+            if [ "$TOTAL" != "?" ] && [ "$TOTAL" -gt 8 ]; then
+              echo "::error title=pytest 失败::共 $TOTAL 条失败/错误，上面只逐条列了前 8 条；完整清单在步骤摘要里"
             fi
 
             {
-              echo "## pytest 失败（exit $code）"
+              echo "## pytest 失败（exit $code，共 $TOTAL 条）"
               echo
               echo '```'
-              echo "$FAILED"
+              echo "$LIST"
               echo '```'
               echo
               echo "<details><summary>日志末尾 60 行</summary>"
