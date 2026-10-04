@@ -46,7 +46,13 @@ from config import settings
 from conversion import registry
 from conversion.options import METADATA_DEFAULT, METADATA_REMOVE
 from services.conversion_types import ConversionOptions
-from tests.conftest import image_files, run_conversion, run_task
+from tests.conftest import (
+    encodable_formats,
+    image_files,
+    requires_heic_encode,
+    run_conversion,
+    run_task,
+)
 
 ENDPOINT = "/api/image/metadata"
 
@@ -701,7 +707,18 @@ def test_the_xmp_sample_really_carries_xmp() -> None:
     assert xmp_of(xmp_png()) == _XMP_CANARY
 
 
-@pytest.mark.parametrize("target", ["jpeg", "png", "webp", "tiff", "heif"])
+@pytest.mark.parametrize(
+    "target",
+    [
+        "jpeg",
+        "png",
+        "webp",
+        "tiff",
+        # 只有装得起 HEVC 编码器的机器才写得出 HEIC；缺了就只跳过这一格，
+        # 上面四种照测（见 conftest 的 requires_heic_encode）。
+        pytest.param("heif", marks=requires_heic_encode),
+    ],
+)
 def test_xmp_survives_every_target_that_can_carry_it(target: str) -> None:
     """「保留」在每一种装得下 XMP 的格式上都必须真的留住它。
 
@@ -756,16 +773,16 @@ def test_a_target_that_cannot_carry_xmp_says_so(tmp_path: Path) -> None:
 def test_remove_drops_the_xmp_in_every_format(tmp_path: Path) -> None:
     """选了「清除」，XMP 就必须真的不在 —— 含源格式自己。
 
-    **每个格式都要过一遍**，包括那些本来就不支持 XMP 的：它们的答案
-    应当是同一个（没有），而「碰巧没有」与「真的删掉了」在这里看起来
-    一样，所以正向对照由上一条测试给出（源文件确实有 XMP）。
+    **每个本机能写出来的格式都要过一遍**，包括那些本来就不支持 XMP 的：
+    它们的答案应当是同一个（没有），而「碰巧没有」与「真的删掉了」在这里
+    看起来一样，所以正向对照由上一条测试给出（源文件确实有 XMP）。
     """
-    from compressors.pipeline import OUTPUT_FORMATS, run_pipeline
+    from compressors.pipeline import run_pipeline
 
     source = tmp_path / "xmp.png"
     source.write_bytes(xmp_png())
 
-    for target in OUTPUT_FORMATS:
+    for target in encodable_formats():
         result = run_pipeline(
             source,
             PipelineOptions(target_format=target, quality_value=95, metadata="remove"),
@@ -915,14 +932,13 @@ def test_the_declared_xmp_formats_match_reality() -> None:
     两者合起来，表既不可能漏也不可能多。
     """
     from compressors.encoder import (
-        OUTPUT_FORMATS,
         build_extra,
         encode_image,
         supports_xmp,
     )
 
     work = Image.open(io.BytesIO(xmp_png())).convert("RGB")
-    for target in OUTPUT_FORMATS:
+    for target in encodable_formats():
         extra = build_extra(target, exif=None, dpi=None, xmp=_XMP_CANARY)
         data = encode_image(work, target, 95, extra=extra)
         survived = xmp_of(data) == _XMP_CANARY
@@ -940,13 +956,13 @@ def test_not_passing_xmp_writes_none_in_every_format() -> None:
     的图片对象上（插件「自己去抓」时看的就是那里），再按「没有 XMP」构造
     参数 —— 结果里不该出现它。
     """
-    from compressors.encoder import OUTPUT_FORMATS, build_extra, encode_image
+    from compressors.encoder import build_extra, encode_image
 
     work = Image.open(io.BytesIO(xmp_png())).convert("RGB")
     work.info["xmp"] = _XMP_CANARY
     work.info[_PNG_XMP_KEY] = _XMP_CANARY.decode("latin-1")
 
-    for target in OUTPUT_FORMATS:
+    for target in encodable_formats():
         data = encode_image(
             work, target, 95, extra=build_extra(target, exif=None, dpi=None)
         )

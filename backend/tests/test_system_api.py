@@ -39,6 +39,7 @@ from tests.conftest import (
     conversion_task,
     image_files,
     office_files,
+    requires_soffice,
     run_conversion,
     submit_conversion,
     wait_conversion,
@@ -229,6 +230,7 @@ def test_workers_timeout_section_matches_the_registry(client: TestClient) -> Non
         ), item["pool"]
 
 
+@requires_soffice
 def test_workers_reports_real_activity(client: TestClient) -> None:
     """接口报的是**真实现状**：提交完立刻看，office 池里 3 项一个不少。
 
@@ -239,6 +241,12 @@ def test_workers_reports_real_activity(client: TestClient) -> None:
     顺带钉住两个接口的一致性：``/api/system/workers`` 的 ``total_queue``
     就是各池之和。此刻只有 office 池有活，所以它必须与 office 池对得上 ——
     两个接口对同一件事各说各话的话，运维该信哪一个？
+
+    挂 ``requires_soffice``：这条要断言一个**精确数字**，前提是这批活真的
+    还在跑。图片转换太快，抢不到那个窗口；而没有 LibreOffice 时
+    ``CONVERTER_UNAVAILABLE`` 会让每项在 1~2 毫秒内结束（实测
+    ``duration_ms=2``），查询到达时队列已经空了 —— 那时接口报的
+    「0 项在跑」是**对的**，是这条用例的前提不成立。
     """
     files = tuple(
         (f"probe-{index}.docx", build_docx_bytes(f"PROBE{index}"))
@@ -491,6 +499,7 @@ def test_registry_counts_retries_and_worker_events() -> None:
 # ======================================================================
 
 
+@requires_soffice
 def test_metrics_track_real_traffic_end_to_end(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

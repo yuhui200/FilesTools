@@ -17,6 +17,12 @@ from conversion import capability, registry
 from services import conversion_service
 from services.office_converter import is_available as office_available
 from services.pdf_to_docx import docx_available
+from tests.conftest import (
+    full_matrix_available,
+    requires_docx,
+    requires_ocr,
+    requires_soffice,
+)
 
 ENDPOINT = "/api/conversion/capabilities"
 
@@ -50,10 +56,69 @@ def capabilities(client: TestClient, params: dict | None = None) -> dict:
     return response.json()
 
 
+def live_flags() -> dict[str, bool]:
+    """这台机器**真实**的组件情况，用来推出「响应里该有哪些格」。
+
+    探测走 ``services`` 层那几个可用性入口与 ``compressors.heif.heif_support()``，
+    再喂给注册表那个**纯函数** ``available_matrix`` —— 于是期望值是
+    「按这台机器的组件算出来的」。
+
+    为什么不直接拿 ``registry.TARGETS_BY_SOURCE`` 当期望：那个是**全表**，
+    只在组件齐备的机器上才等于响应。上一版就是这么写的，于是这一组用例
+    断言的其实是「CI 的 runner 装了什么」—— 缺 LibreOffice 时满屏红，
+    而代码一点问题都没有。
+    """
+    support = heif.heif_support()
+    return {
+        "office_ok": office_available(),
+        "pdf_to_word_ok": docx_available(),
+        "heif_decode_ok": support.decode,
+        "heif_encode_ok": support.encode,
+    }
+
+
+def expected_matrix() -> dict[str, tuple[str, ...]]:
+    """响应里 ``matrix`` 本该长什么样。组件齐备时它就等于注册表全表。"""
+    return registry.available_matrix(**live_flags())
+
+
+def expected_groups() -> list[str]:
+    """还剩下源的分组，按**首次出现**的顺序（与 ``available_matrix`` 同序）。
+
+    一个源都不剩的组不该出现在响应里 —— 前端会照着它渲染出一张
+    点不动的空卡片（§七）。
+    """
+    remaining = set(expected_matrix())
+    seen: list[str] = []
+    for source in registry.TARGETS_BY_SOURCE:
+        if source not in remaining:
+            continue
+        group = registry.SOURCE_GROUPS[source]
+        if group not in seen:
+            seen.append(group)
+    return seen
+
+
+def expected_targets() -> list[str]:
+    """还剩下目标格式，按 ``TARGET_TYPES`` 的原顺序。"""
+    remaining = {target for targets in expected_matrix().values() for target in targets}
+    return [target for target in registry.TARGET_TYPES if target in remaining]
+
+
 # ----------------------------------------------------------------------
 # 形状
 # ----------------------------------------------------------------------
 
+#: 「组件齐备时矩阵等于全表」是这一组里唯一**比原始全表**的断言，
+#: 只能在真齐备的机器上跑 —— 缺任何一样，响应都会**正确地**少几行。
+#: 组件不齐时的形状由下面那批派生期望的用例负责。
+requires_full_matrix = pytest.mark.skipif(
+    not full_matrix_available(),
+    reason="本机没有配齐 LibreOffice / python-docx / HEIC 编解码器，跳过全表断言",
+)
+
+
+@requires_full_matrix
 def test_capabilities_reports_the_whole_matrix(client: TestClient) -> None:
     """本机 LibreOffice 与 python-docx 都在，矩阵应当是完整的 11 行。"""
     assert office_available() and docx_available(), "本机应当具备全部转换组件"
@@ -73,8 +138,10 @@ def test_groups_cover_every_source_exactly_once(client: TestClient) -> None:
     body = capabilities(client)
 
     groups = {group["key"]: group for group in body["groups"]}
-    assert set(groups) == set(registry.GROUP_LABELS)
-    assert [group["key"] for group in body["groups"]][0] is not None
+    # 期望的源/组由这台机器**真实的组件**推出，不是手抄的全表 ——
+    # 见 live_flags 的说明。
+    expected = expected_matrix()
+    assert [group["key"] for group in body["groups"]] == expected_groups()
 
     seen: list[str] = []
     for group in body["groups"]:
@@ -84,7 +151,7 @@ def test_groups_cover_every_source_exactly_once(client: TestClient) -> None:
             assert registry.SOURCE_GROUPS[value] == group["key"]
             assert source["label"] == registry.SOURCE_LABELS[value]
             assert source["extensions"] == list(registry.EXTENSIONS_BY_SOURCE[value])
-            assert source["targets"] == list(registry.TARGETS_BY_SOURCE[value])
+            assert source["targets"] == list(expected[value])
             seen.append(value)
         # 这一组的目标是组内各源目标的并集，且按出现顺序去重
         union: list[str] = []
@@ -94,7 +161,7 @@ def test_groups_cover_every_source_exactly_once(client: TestClient) -> None:
                     union.append(target)
         assert group["targets"] == union
 
-    assert sorted(seen) == sorted(registry.SOURCE_TYPES)
+    assert sorted(seen) == sorted(expected)
 
 
 def test_target_options_are_renderable(client: TestClient) -> None:
@@ -102,12 +169,13 @@ def test_target_options_are_renderable(client: TestClient) -> None:
     body = capabilities(client)
 
     options = {item["value"]: item for item in body["targets"]}
-    assert set(options) == set(registry.TARGET_TYPES)
+    assert [item["value"] for item in body["targets"]] == expected_targets()
     for value, item in options.items():
         assert item["label"] == registry.TARGET_LABELS[value]
         assert item["extension"] == registry.EXTENSION_BY_TARGET[value]
 
 
+@requires_ocr
 def test_pdf_to_word_note_describes_ocr_honestly(client: TestClient) -> None:
     body = capabilities(client)
 
@@ -144,9 +212,15 @@ def test_missing_libreoffice_removes_office_but_keeps_txt(
     assert not (rendered & set(OFFICE_SOURCES))
 
 
+@requires_soffice
 def test_missing_docx_component_removes_pdf_to_word(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """只拔掉 python-docx 时的形状。
+
+    前提是**别的组件都在**（这里断言 ``matrix["docx"]`` 还在）——
+    没有 LibreOffice 时整个 office 组都不存在，这条问的不是它要问的事。
+    """
     monkeypatch.setattr(conversion_service, "docx_available", lambda: False)
 
     body = capabilities(client)
@@ -159,6 +233,7 @@ def test_missing_docx_component_removes_pdf_to_word(
     assert "docx" not in {item["value"] for item in body["targets"]}
 
 
+@requires_docx
 def test_ocr_unavailable_keeps_pdf_to_word(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -166,7 +241,15 @@ def test_ocr_unavailable_keeps_pdf_to_word(
 
     带文字层的 PDF 本来就能转，只是扫描页会转成空白。把整条能力藏掉
     是过度降级 —— 用户会以为这个网站根本不能把 PDF 转成 Word。
+
+    挂 ``requires_docx``：这条要断言 ``matrix["pdf"]`` 还在，缺 python-docx
+    时它本来就不该在，问的是别的事。
     """
+    # 关掉 OCR **之前**先取一份：下面要测的是「关掉 OCR 有没有新增说明」，
+    # 不是「这台机器一条说明都没有」。原写法断言 ``notes == []``，
+    # 那要求这台机器其它组件全都在 —— 缺 LibreOffice 时它红得毫无道理。
+    before = capabilities(client)
+
     monkeypatch.setattr(conversion_service, "ocr_available", lambda: False)
 
     body = capabilities(client)
@@ -174,8 +257,8 @@ def test_ocr_unavailable_keeps_pdf_to_word(
     assert body["ocr_available"] is False
     assert body["matrix"][registry.SOURCE_PDF] == ["docx"]
     assert "docx" in {item["value"] for item in body["targets"]}
-    # 缺 OCR 不是「缺组件」，不该出现在能力缺失说明里
-    assert body["notes"] == []
+    # 缺 OCR 不是「缺组件」，不该多出一条能力缺失说明
+    assert body["notes"] == before["notes"]
     # 但必须在提示里如实说明扫描件会怎样
     assert "文字层" in body["pdf_to_word_note"]
     assert "扫描" in body["pdf_to_word_note"]
@@ -296,25 +379,22 @@ def test_new_catalog_keys_are_published(client: TestClient) -> None:
 
 
 def test_old_keys_are_byte_identical_without_filters(client: TestClient) -> None:
-    """不带查询参数时，第七阶段的几个键必须与注册表逐字节一致。
+    """不带查询参数时，第七阶段的几个键必须与注册表的**当前形态**逐字节一致。
 
     加了四个新键、又给旧键接上过滤器，最容易出的事就是顺手把旧键的形状
     也改了 —— 旧前端会当场白屏。
+
+    期望值按 ``available_matrix``（拿这台机器真实的组件情况算）取，
+    而不是注册表全表：后者只在组件齐备时才对。全表那一条由
+    :func:`test_capabilities_reports_the_whole_matrix` 单独钉着。
     """
     body = capabilities(client)
 
     assert body["matrix"] == {
-        source: list(targets) for source, targets in registry.TARGETS_BY_SOURCE.items()
+        source: list(targets) for source, targets in expected_matrix().items()
     }
-    assert [group["key"] for group in body["groups"]] == [
-        group
-        for group in ("image", "office", "text", "pdf")
-        if any(
-            registry.SOURCE_GROUPS[source] == group
-            for source in registry.TARGETS_BY_SOURCE
-        )
-    ]
-    assert [item["value"] for item in body["targets"]] == list(registry.TARGET_TYPES)
+    assert [group["key"] for group in body["groups"]] == expected_groups()
+    assert [item["value"] for item in body["targets"]] == expected_targets()
 
 
 def test_every_conversion_entry_has_the_required_fields(client: TestClient) -> None:

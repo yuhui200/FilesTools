@@ -31,6 +31,7 @@ from tests.conftest import (
     image_files,
     office_files,
     pdf_files,
+    requires_soffice,
     run_conversion,
     submit_conversion,
     wait_conversion,
@@ -329,6 +330,12 @@ def test_zip_never_contains_parent_paths(client: TestClient) -> None:
 # 取消（§十五：协作式，且如实显示）
 # ----------------------------------------------------------------------
 
+#: 下面这一节用 Office 文档当载体，只为了一件事：**让任务在 worker 里
+#: 真的待够时间**。取消要看「排队项立刻停、在跑项如实显示 cancelling」，
+#: 重试要用「转换锁被占住」造一个真实的偶发失败 —— 两者都要求这一批
+#: 不是瞬间就跑完的。图片转 PNG 太快，抢不到那个窗口。
+#: 代价是没有 LibreOffice 时（任务秒失败，队列立刻空）这几条问不出答案。
+@requires_soffice
 def test_cancel_stops_queued_items_and_is_honest_about_running_ones(
     client: TestClient,
 ) -> None:
@@ -395,6 +402,7 @@ def test_cancel_is_idempotent_and_unknown_batch_is_404(client: TestClient) -> No
     assert client.post(f"{ENDPOINT}/nope/cancel").status_code == 404
 
 
+@requires_soffice
 def test_cancelled_item_cannot_be_retried(client: TestClient) -> None:
     """用户自己不要的东西，不能靠重试又转起来。"""
     files = tuple(
@@ -446,6 +454,7 @@ def test_retry_rejects_malformed_task_id(client: TestClient) -> None:
         )
 
 
+@requires_soffice
 def test_retry_after_a_transient_failure_succeeds(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -502,6 +511,7 @@ def test_retry_after_a_transient_failure_succeeds(
     assert again.json()["error"]["code"] == ErrorCode.TASK_NOT_RETRYABLE
 
 
+@requires_soffice
 def test_retry_rebuilds_the_archive_and_spares_the_single_result(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

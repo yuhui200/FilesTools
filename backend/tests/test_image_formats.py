@@ -61,6 +61,7 @@ from tests.conftest import (
     build_image_bytes,
     build_multipage_tiff,
     conversion_task,
+    encodable_formats,
     image_files,
     run_conversion,
 )
@@ -348,16 +349,19 @@ def test_ico_is_never_a_zero_frame_shell() -> None:
 
 
 def test_every_image_target_encoder_produces_a_openable_file() -> None:
-    """七种目标格式都要产出**真的打得开**的文件，不能只看字节数。
+    """每一种本机能写出来的目标格式都要产出**真的打得开**的文件，不能只看字节数。
 
     §五十五~§五十七 的 Real Output Validation 在单元层的最小版本：
     编码器是「最后一道工序」，它悄悄产出空壳的话，前面所有校验都白做。
     有损格式（JPG / WEBP）只能比个大概，无损格式必须逐像素相等。
-    """
-    from compressors.encoder import OUTPUT_FORMATS
 
+    遍历 ``encodable_formats()`` 而不是 ``OUTPUT_FORMATS``：后者是
+    「编码器认识它们」，其中 ``heif`` 要 ``pillow-heif`` 带 HEVC 编码器
+    才写得出来。缺席时只把它一项去掉 —— 其余七种格式的回归一条都不能少，
+    不整条跳过。
+    """
     lossy = {"jpeg", "webp"}
-    for fmt in OUTPUT_FORMATS:
+    for fmt in encodable_formats():
         prepared = prepare_for_format(_sample("png", (40, 24)), fmt)
         data = encode_image(prepared, fmt, 85)
         assert data, fmt

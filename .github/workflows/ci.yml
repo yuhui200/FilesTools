@@ -1,14 +1,38 @@
 name: CI
 
-# ⚠️ 未实测：这份工作流**从未在 GitHub 上跑过**（开发机没有 Docker、也不出网，
-#    无法在本地复现 runner 环境）。步骤按本项目已验证的命令写成，但首次推上去
-#    可能需要微调。特别提醒两点：
-#      1. Python 3.14 —— 本地实测就是 3.14.5，所以这里写 3.14；
-#         若 setup-python 在你用的 runner 上还没有 3.14，会直接报「版本不存在」。
-#      2. LibreOffice —— runner 上没有装，所以 Office 相关的用例会**跳过**而不是失败
-#         （它们挂的是 requires_soffice / requires_ocr 标记，探测不到组件就 skip）。
-#         也就是说 CI 全绿**不等于** Office 转换被验证过。
+# 实测记录：2026-09-29 那次 push 上跑过一次 —— 前端 job 通过，后端 job 在
+# 「跑测试」处红。原因是**这份注释原来写错了**：它说 Office 相关用例会跳过，
+# 但那些标记（requires_soffice / requires_ocr）当时只挂在 test_office_converter.py
+# 那一层，API 层的用例一个都没挂，于是它们在没有组件的 runner 上直接断言失败。
+# 现在已按真实依赖逐个补齐，并在本机用「把组件藏掉」的方式复现验证过：
+#     29 failed / 1545 passed / 58 skipped  →  0 failed / 1554 passed / 78 skipped
+# 其中 20 条转为跳过、9 条改成按本机实测能力派生期望值后**仍然在跑**（不是跳过）。
+
+# 覆盖率：装完 LibreOffice（见下面那两步）之后，CI 上真正跳过的是
+# **OCR 与 HEIC** 那一批，约 20 条。它们**不是装不了** —— 仓库里有
+# requirements-ocr.txt 和 requirements-heic.txt，各自加一行 pip install 就能开；
+# 只是这两份依赖刻意不进 requirements.txt（体积、以及 libx265 的 GPLv2，
+# 理由都写在那两份文件开头），所以 CI 默认不装。也就是说：
+#   * Office 三个方向（Word / Excel / PowerPoint → PDF）在 CI 上是**真转**的；
+#   * PDF → Word 的文字层路径也是真跑的；
+#   * OCR 那条路径（扫描件）与 HEIC 编解码在 CI 上**没有验证**。
+# 要把这两格也盖上，在「安装依赖」那步后面再加一行
+# `pip install -r requirements-ocr.txt` / `-r requirements-heic.txt` 即可。
+# 真正的全量验收仍是发布前在本机跑满 12 步（scripts/verify_phase*.py 那一串）。
+
+# ⚠️ 下面这几步 LibreOffice 安装**尚未在真实 runner 上跑过**：开发机没有
+#    Docker、WSL 也没有发行版，无法在本地复现 Linux 环境。命令按 Ubuntu 24.04
+#    的包名写成，`自检组件` 那一步会在装失败时给出一句能读的原因。
+#    首次推上去请看真实日志；若 apt 源或包名有出入，只有那一步会红。
 #
+#    Python 3.14 —— 本地实测就是 3.14.5，所以这里写 3.14；若 setup-python
+#    在你用的 runner 上还没有 3.14，会在 setup-python 那一步直接报
+#    「版本不存在」，与测试无关。
+#
+#    刻意**没有**顺手把 actions/checkout@v4、setup-python@v5 升到最新：
+#    那会在同一次提交里混进第二个未验证的变量。首次跑出问题时，
+#    要能确定是哪里红的。
+
 # ⚠️ CI 里刻意**不跑** scripts/verify_phase*.py：那批脚本要真实 Chromium、
 #    要 LibreOffice、要一个常驻的后端进程，12 步串行跑满约 15 分钟，而且
 #    必须串行（并发跑必然假红）。它们属于发布前的真机验收，不属于 PR 门禁。
@@ -38,10 +62,43 @@ jobs:
       - name: 安装依赖
         run: pip install -r requirements-dev.txt
 
+      # LibreOffice **不是** runner 预装的（actions/runner-images 的 Ubuntu 24.04
+      # 清单里没有它，也没有任何 office 套件），所以这里自己装。
+      # 三个组件对应三种输入：writer=Word / calc=Excel / impress=PowerPoint。
+      # `/usr/bin/soffice` 由 libreoffice-core 提供，而它是这三个的依赖，
+      # 会被一起装上 —— services/office_converter.py 的 _COMMON_DIRS 里
+      # 有 /usr/bin，也有 shutil.which("soffice") 兜底，不用改代码。
+      #
+      # fonts-noto-cjk **不是可选项**。测试样张里有中文
+      # （conftest.py: OFFICE_MARKER = "MARKER-测试标记-42"），断言是
+      # `assert OFFICE_MARKER in <从转出来的 PDF 里取出的文字>`。
+      # 缺字体时 LibreOffice 排不出那几个字、get_text() 也取不回来，
+      # 断言会红 —— 而那种红看起来像「转换坏了」，其实是字体没装。
+      #
+      # --no-install-recommends 砍掉推荐包（Java、字体全家桶、帮助文档等），
+      # 装完约几百 MB；带上 recommends 会大得多。
+      - name: 安装 LibreOffice（Office 用例要真跑，不是跳过）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libreoffice-writer libreoffice-calc libreoffice-impress \
+            fonts-noto-cjk
+
+      # 早失败：组件没装好就在这里停住，给一句能读的原因，
+      # 而不是让后面几十条断言一起红、再去猜是代码坏了还是环境没配好。
+      - name: 自检组件
+        run: |
+          python -c "from services.office_converter import find_soffice; p=find_soffice(); print('soffice =', p); raise SystemExit(0 if p else 'soffice 没找到：LibreOffice 没装成')"
+          count=$(fc-list :lang=zh | wc -l)
+          echo "中文字体条目 = $count"
+          [ "$count" -gt 0 ] || { echo "没有中文字体：中文样张会渲染不出来，Office 用例会红"; exit 1; }
+
       # -o addopts= 是必须的：pytest.ini 里写了 addopts = -q，
       # 不加这个覆盖就没法在命令行上再给别的参数。
+      # -rs 把跳过原因打出来：OCR / HEIC 的用例在 runner 上会跳过，
+      # 「全绿」必须和「跳了多少、为什么跳」一起读（见文件头的说明）。
       - name: 跑测试
-        run: python -m pytest -o addopts= -q
+        run: python -m pytest -o addopts= -q -rs
         env:
           PYTHONIOENCODING: utf-8
 

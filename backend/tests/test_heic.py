@@ -46,7 +46,7 @@ from utils.validation import (
     sniff_format,
     validate_image_upload,
 )
-from tests.conftest import build_image_bytes
+from tests.conftest import build_image_bytes, encodable_formats
 
 #: 这台机器上到底有没有编解码器。下面凡是**真跑**的用例都要看它 ——
 #: 没有组件的机器上这些用例该 skip 而不是 fail（§八十二 要求
@@ -535,7 +535,7 @@ def test_heic_metadata_remove_really_removes(tmp_path) -> None:
 
 
 def test_not_passing_exif_means_not_writing_it_in_every_format(tmp_path) -> None:
-    """「不传 ``exif=``」在**每一种**输出格式上都必须等于「不写 EXIF」。
+    """「不传 ``exif=``」在**每一种本机能写出来的**输出格式上都必须等于「不写 EXIF」。
 
     不针对 HEIC 写死：这条是通用的不变式，逐格式实测。将来 Pillow 或某个
     插件改了行为（又多一个自己去图片对象上抓元数据的格式），这里会红，
@@ -543,9 +543,11 @@ def test_not_passing_exif_means_not_writing_it_in_every_format(tmp_path) -> None
 
     做法是把元数据**直接挂在待编码的图片对象上**，再让 ``build_extra``
     按「没有 EXIF」去构造参数 —— 这正是插件「自己去抓」时看的地方。
+
+    遍历 ``encodable_formats()``：没装 ``pillow-heif`` 的机器写不出 HEIC，
+    把它一项去掉即可，其余格式照测（见 conftest 里的说明）。
     """
     from compressors.encoder import (
-        OUTPUT_FORMATS,
         build_extra,
         encode_image,
         supports_exif,
@@ -557,7 +559,7 @@ def test_not_passing_exif_means_not_writing_it_in_every_format(tmp_path) -> None
     raw_exif = carrier.info.get("exif")
     assert raw_exif, "样张自己没带上 EXIF，下面整轮都没意义"
 
-    for target in OUTPUT_FORMATS:
+    for target in encodable_formats():
         work = prepare_for_format(carrier, target)
         # 模拟「图片对象上带着元数据」：两条抓取路径都铺上
         work.info["exif"] = raw_exif

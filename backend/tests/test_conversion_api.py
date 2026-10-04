@@ -37,6 +37,8 @@ from tests.conftest import (
     image_files,
     office_files,
     pdf_files,
+    requires_ocr,
+    requires_soffice,
     run_conversion,
     submit_conversion,
     wait_conversion,
@@ -128,8 +130,16 @@ def test_lightweight_progress_matches_the_full_snapshot(client: TestClient) -> N
 # 四个分支：产物必须真的能打开
 # ----------------------------------------------------------------------
 
+@requires_ocr
 def test_pdf_to_docx_produces_a_real_document(client: TestClient) -> None:
-    """PDF → Word：DOCX 必须真的能打开，而且文字真的在里面。"""
+    """PDF → Word：DOCX 必须真的能打开，而且文字真的在里面。
+
+    挂 ``requires_ocr`` 是因为 ``build_labeled_pdf`` 每页只写一个短标签
+    （``one-1`` ＝ 5 个字符），低于 ``PDF_TO_WORD_MIN_TEXT_CHARS``（默认 16），
+    ``detect_page_kind`` 会**如实**把这一页判成扫描页，于是真的走 OCR。
+    这是既有覆盖，不是新加的依赖 —— 文字层那条路径由
+    ``test_pdf_to_word_api.py`` 里用长文本的用例负责。
+    """
     pdf = build_labeled_pdf("one", 2)
     snapshot = run_conversion(
         client,
@@ -167,6 +177,7 @@ def test_pdf_to_docx_produces_a_real_document(client: TestClient) -> None:
     assert client.get(task["result"]["download_url"]).status_code == 404
 
 
+@requires_soffice
 def test_docx_to_pdf_produces_a_real_pdf(client: TestClient) -> None:
     snapshot = run_conversion(
         client,
@@ -189,6 +200,7 @@ def test_docx_to_pdf_produces_a_real_pdf(client: TestClient) -> None:
         assert "HELLO" in "".join(page.get_text() for page in doc)
 
 
+@requires_soffice
 def test_xlsx_and_pptx_to_pdf(client: TestClient) -> None:
     """Excel 与 PowerPoint 走的是同一条 LibreOffice 链路，但输入校验不同。"""
     xlsx = run_conversion(
@@ -378,8 +390,13 @@ def test_no_fake_percentage_for_image_conversion(client: TestClient) -> None:
     assert task["page_count"] is None
 
 
+@requires_ocr
 def test_progress_id_reports_real_pages(client: TestClient) -> None:
-    """带上进度 id 时，PDF → Word 的真实页码要能被读到。"""
+    """带上进度 id 时，PDF → Word 的真实页码要能被读到。
+
+    短标签 PDF 会被判成扫描页（见 ``test_pdf_to_docx_produces_a_real_document``），
+    所以这条要 OCR —— 而「真实页码」这件事恰恰只有扫描页那条路才报得出来。
+    """
     snapshot = run_conversion(
         client,
         files=pdf_files(("doc.pdf", build_labeled_pdf("p", 2)), field="files"),
@@ -396,6 +413,7 @@ def test_progress_id_reports_real_pages(client: TestClient) -> None:
         assert 0 < task["progress"] <= 100
 
 
+@requires_ocr
 def test_malformed_progress_id_is_ignored(client: TestClient) -> None:
     """形状不合法的进度 id 当作没传，不能因此报参数错误（与第六阶段一致）。"""
     snapshot = run_conversion(

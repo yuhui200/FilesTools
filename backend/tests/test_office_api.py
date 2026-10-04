@@ -301,7 +301,18 @@ def test_excel_uploaded_to_the_word_endpoint_is_rejected(client: TestClient) -> 
     assert "Excel" in error["message"]
 
 
+@requires_soffice
 def test_renamed_executable_is_rejected(client: TestClient) -> None:
+    """挂在 LibreOffice 上：下面那 4 条同理。
+
+    缺组件时 ``receive_office`` 在**落盘之前**就抛 503（``doc_service.py``
+    里那句 ``if kind != KIND_TEXT and not is_available()``），于是内容嗅探与
+    参数校验根本没机会跑起来 —— 那个顺序是有意的，由
+    :func:`test_missing_component_is_reported_without_writing_to_disk` 钉着：
+    服务器都用不了这个功能了，就不该把用户的文件先写到磁盘上再告诉他。
+    代价是这几条「坏输入该被拒」的用例在没有组件的机器上问不到答案，
+    只能跳过；它们的校验逻辑由上面那批单元测试继续覆盖。
+    """
     response = client.post(
         WORD, files=office_files(("invoice.docx", b"MZ\x90\x00" + b"\x00" * 2048))
     )
@@ -319,6 +330,7 @@ def test_unsupported_extension_is_rejected(client: TestClient) -> None:
     )
 
 
+@requires_soffice
 def test_corrupt_document_reports_the_corrupt_message(client: TestClient) -> None:
     """容器齐全但正文 XML 坏了 —— 用户该做的是重新拿一份文件。"""
     parts = {
@@ -340,6 +352,7 @@ def test_corrupt_document_reports_the_corrupt_message(client: TestClient) -> Non
     )
 
 
+@requires_soffice
 def test_empty_upload_is_rejected(client: TestClient) -> None:
     response = client.post(WORD, files=office_files(("empty.docx", b"")))
 
@@ -458,6 +471,10 @@ def test_unreachable_target_is_reported_honestly(client: TestClient) -> None:
     assert "102.40 KB" in notes
 
 
+# 「最大文件大小」参数的两条校验也挂在 LibreOffice 上：
+# 目标大小是 LibreOffice 转完之后再压的（TXT 那条链路根本不看它），
+# 所以整个接口在没有组件的机器上都是 503。见 test_renamed_executable 的说明。
+@requires_soffice
 def test_invalid_target_preset_is_rejected(client: TestClient) -> None:
     """档位不在白名单里要明确报错，不能悄悄退回「不限制」。"""
     response = client.post(
@@ -471,6 +488,7 @@ def test_invalid_target_preset_is_rejected(client: TestClient) -> None:
     )
 
 
+@requires_soffice
 def test_custom_target_requires_a_number(client: TestClient) -> None:
     response = client.post(
         WORD,

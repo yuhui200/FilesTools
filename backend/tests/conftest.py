@@ -799,6 +799,86 @@ requires_ocr = pytest.mark.skipif(
 )
 
 
+def docx_available() -> bool:
+    """本机能不能 ``PDF → Word``（要 python-docx）。
+
+    和上面两个同一个套路：只问可用性探测，不 import 引擎的其它部分，
+    ``ImportError`` 吞掉。它单独成一条是因为 ``pdf → docx`` 的可用性
+    **与 LibreOffice 无关**、也与 OCR 无关（§七 明令 OCR 不可用时这条
+    能力必须保留），是个独立的维度。
+    """
+    try:
+        from services import pdf_to_docx
+    except ImportError:
+        return False
+
+    return pdf_to_docx.docx_available()
+
+
+#: 需要 ``PDF → Word`` 真能跑起来的测试挂这个标记
+requires_docx = pytest.mark.skipif(
+    not docx_available(), reason="本机没有 python-docx，跳过 PDF 转 Word 测试"
+)
+
+
+def heif_encode_available() -> bool:
+    """本机能不能**写出** HEIC（要带 libx265 的 pillow-heif）。
+
+    ``heif_support()`` 会真编一张 2×2 再读回来（见 ``compressors/heif.py``
+    的模块说明），结果在进程内缓存，所以这里反复调用没有代价。
+    """
+    try:
+        from compressors.heif import heif_support
+    except ImportError:
+        return False
+
+    return heif_support().encode
+
+
+#: 需要真的编码出 HEIC 的测试挂这个标记。
+#: **只在这个方向上挂** —— 只有解码器的构建照样能 ``HEIC → JPG``，
+#: 那半边由 ``compressors.heif.heif_support().decode`` 单独回答。
+requires_heic_encode = pytest.mark.skipif(
+    not heif_encode_available(), reason="本机没有 HEIC 编码器，跳过写出 HEIC 的测试"
+)
+
+
+def full_matrix_available() -> bool:
+    """四种可选组件是不是全都在。
+
+    只有齐备时 ``/api/conversion/capabilities`` 的矩阵才恰好等于
+    ``registry`` 的全表 —— 少任何一样，响应都会**正确地**少几行/几格。
+    所以「本机应当具备全部转换组件」那类断言必须挂在这个条件上，
+    否则它测的是「这台机器装了什么」，不是「代码对不对」。
+    """
+    if not (soffice_available() and docx_available() and heif_encode_available()):
+        return False
+
+    try:
+        from compressors.heif import heif_support
+    except ImportError:
+        return False
+
+    return heif_support().decode
+
+
+def encodable_formats() -> tuple[str, ...]:
+    """本机**真能写出来**的目标格式，按 ``OUTPUT_FORMATS`` 的原顺序。
+
+    ``OUTPUT_FORMATS`` 回答的是「编码器认识它们」；这里面唯一可能有中间态
+    的是 ``heif``（要 ``pillow-heif`` 带 HEVC 编码器）。缺席时把它从遍历里
+    去掉，**而不是跳过整条用例** —— 其余七种格式的回归一条都不能少，
+    而「表里有 heif」这件事由 ``test_output_formats_cover_the_whole_registry_vocabulary``
+    单独钉着，不会因为这里过滤了就没人管。
+    """
+    from compressors.encoder import OUTPUT_FORMATS
+
+    if heif_encode_available():
+        return OUTPUT_FORMATS
+
+    return tuple(fmt for fmt in OUTPUT_FORMATS if fmt != "heif")
+
+
 def normalize_ocr_text(text: str) -> str:
     """比对 OCR 结果前先归一化。
 
