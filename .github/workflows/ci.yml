@@ -8,22 +8,39 @@ name: CI
 #     29 failed / 1545 passed / 58 skipped  →  0 failed / 1554 passed / 78 skipped
 # 其中 20 条转为跳过、9 条改成按本机实测能力派生期望值后**仍然在跑**（不是跳过）。
 
-# 覆盖率：装完 LibreOffice（见下面那两步）之后，CI 上真正跳过的是
-# **OCR 与 HEIC** 那一批，约 20 条。它们**不是装不了** —— 仓库里有
-# requirements-ocr.txt 和 requirements-heic.txt，各自加一行 pip install 就能开；
-# 只是这两份依赖刻意不进 requirements.txt（体积、以及 libx265 的 GPLv2，
-# 理由都写在那两份文件开头），所以 CI 默认不装。也就是说：
+# 覆盖率：装完 LibreOffice 与 pillow-heif（见下面那三步）之后，CI 上真正
+# 跳过的只剩 **OCR** 那一批，约 4 条。也就是说：
 #   * Office 三个方向（Word / Excel / PowerPoint → PDF）在 CI 上是**真转**的；
 #   * PDF → Word 的文字层路径也是真跑的；
-#   * OCR 那条路径（扫描件）与 HEIC 编解码在 CI 上**没有验证**。
-# 要把这两格也盖上，在「安装依赖」那步后面再加一行
-# `pip install -r requirements-ocr.txt` / `-r requirements-heic.txt` 即可。
+#   * HEIC 编解码也是真跑的（pillow-heif 那一步）；
+#   * **OCR 那条路径（扫描件）在 CI 上没有验证**。
+#
+# 为什么偏偏只有 OCR 不装：requirements-ocr.txt 要拖进 onnxruntime + opencv
+# （200 MB 上下），而 OCR 又是**逐页串行**的（约 2 秒/页），会明显拖长 job；
+# 换来的只有那 4 条。不是装不了，是性价比不合算。它在仓库里，想开就在
+# 「安装 HEIC 支持」那步后面再加一行 `pip install -r requirements-ocr.txt`。
+#
+# ⚠️ pillow-heif 带 libx265（GPLv2），HEVC 另有专利池 —— 在一次性 runner 上
+#    装了跑测试**不构成分发**，但如果将来有人把这个 job 改成产出可下载的
+#    制品，那个判断就要重新做一遍。许可说明见 backend/requirements-heic.txt。
+#
 # 真正的全量验收仍是发布前在本机跑满 12 步（scripts/verify_phase*.py 那一串）。
 
-# ⚠️ 下面这几步 LibreOffice 安装**尚未在真实 runner 上跑过**：开发机没有
-#    Docker、WSL 也没有发行版，无法在本地复现 Linux 环境。命令按 Ubuntu 24.04
-#    的包名写成，`自检组件` 那一步会在装失败时给出一句能读的原因。
+# ⚠️ 下面那三步装组件**尚未在真实 runner 上跑过**：开发机没有 Docker、
+#    WSL 也没有发行版，无法在本地复现 Linux 环境。命令按 Ubuntu 24.04 的
+#    包名写成，`自检组件` 那一步会在装失败时给出一句能读的原因。
 #    首次推上去请看真实日志；若 apt 源或包名有出入，只有那一步会红。
+#
+#    pillow-heif 那个 pip 步骤倒是查实了两件事（都是直接看真实产物，不是读文档）：
+#      1. PyPI 上确有 cp314 的 manylinux x86_64 wheel（本机那份的标签是
+#         cp314-cp314-win_amd64，不是 abi3，所以「按版本构建」是真的，
+#         当时确实该查一下）；
+#      2. 把那份 manylinux wheel 拆开看，pillow_heif.libs/ 里**带**
+#         libx265（22.8 MB）、libde265 与 libheif 1.23.4。
+#    所以 runner 上 encode 预期为 True。`自检组件` 仍把两个值都打出来，
+#    但只在 **decode** 为假时判红（那是包没装成）；encode 为假只发一条
+#    ::warning:: 注解 —— 那几格会照旧跳过，不是回归，不该挡路，但也不该
+#    悄悄过去。
 #
 #    Python 3.14 —— 本地实测就是 3.14.5，所以这里写 3.14；若 setup-python
 #    在你用的 runner 上还没有 3.14，会在 setup-python 那一步直接报
@@ -62,6 +79,14 @@ jobs:
       - name: 安装依赖
         run: pip install -r requirements-dev.txt
 
+      # HEIC 与 LibreOffice 不同：它是 pip 包不是 apt 包。这份依赖刻意不进
+      # requirements.txt（体积，以及 libx265 的 GPLv2 —— 见文件头与
+      # backend/requirements-heic.txt），所以单独装。装不上不会有中间态，
+      # 下一步 `自检组件` 会当场报出来。
+      # 只开 HEIC、不开 OCR：理由写在文件头的「覆盖率」那段。
+      - name: 安装 HEIC 支持
+        run: pip install -r requirements-heic.txt
+
       # LibreOffice **不是** runner 预装的（actions/runner-images 的 Ubuntu 24.04
       # 清单里没有它，也没有任何 office 套件），所以这里自己装。
       # 三个组件对应三种输入：writer=Word / calc=Excel / impress=PowerPoint。
@@ -92,6 +117,29 @@ jobs:
           count=$(fc-list :lang=zh | wc -l)
           echo "中文字体条目 = $count"
           [ "$count" -gt 0 ] || { echo "没有中文字体：中文样张会渲染不出来，Office 用例会红"; exit 1; }
+          python - <<'PY'
+          import sys
+
+          from compressors.heif import heif_support
+
+          s = heif_support()
+          print(f"HEIC decode={s.decode} encode={s.encode} "
+                f"pillow-heif={s.package_version} libheif={s.libheif_version}")
+
+          if not s.decode:
+              # 包里连 libde265 都在（下面注释记了实测），解不了就是真装坏了。
+              raise SystemExit("HEIC 组件不可用：" + (s.reason or "原因未知"))
+
+          if not s.encode:
+              # 这份 wheel 实测**带** libx265，所以 encode 为假是反常信号：
+              # 那一格会继续跳过（与加这一步之前一样，不是回归），不该把 job
+              # 判红挡路，但也绝不该悄悄过去 —— 用 ::warning:: 让它以注解
+              # 形式出现在 Actions 界面上。见到它就来查这一条。
+              print("::warning title=HEIC 编码方向不可用::"
+                    "pillow-heif 装上了、解码也正常，但 encode=False。"
+                    "预期这块 wheel 带 libx265，请核对 "
+                    "backend/requirements-heic.txt 里的版本与 wheel 内容。")
+          PY
 
       # -o addopts= 是必须的：pytest.ini 里写了 addopts = -q，
       # 不加这个覆盖就没法在命令行上再给别的参数。
