@@ -1,12 +1,26 @@
 name: CI
 
-# 实测记录：2026-09-29 那次 push 上跑过一次 —— 前端 job 通过，后端 job 在
-# 「跑测试」处红。原因是**这份注释原来写错了**：它说 Office 相关用例会跳过，
-# 但那些标记（requires_soffice / requires_ocr）当时只挂在 test_office_converter.py
-# 那一层，API 层的用例一个都没挂，于是它们在没有组件的 runner 上直接断言失败。
-# 现在已按真实依赖逐个补齐，并在本机用「把组件藏掉」的方式复现验证过：
-#     29 failed / 1545 passed / 58 skipped  →  0 failed / 1554 passed / 78 skipped
-# 其中 20 条转为跳过、9 条改成按本机实测能力派生期望值后**仍然在跑**（不是跳过）。
+# 实测记录（两次跑，都记在这里，免得下一轮又把结论搞错）
+#
+# ── 第一次，2026-09-29（`819e690`）：前端 job 通过，后端 job 29 failed。
+#    原因是**这份注释原来写错了**：它说 Office 相关用例会跳过，但那些标记
+#    （requires_soffice / requires_ocr）当时只挂在 test_office_converter.py
+#    那一层，API 层的用例一个都没挂，于是它们在没有组件的 runner 上直接断言失败。
+#    29 条全部归因于 runner 缺组件，没有一条指向生产代码。已按真实依赖逐个补齐，
+#    并在本机用「把组件藏掉」的方式复现验证过：
+#        29 failed / 1545 passed / 58 skipped  →  0 failed / 1554 passed / 78 skipped
+#    其中 20 条转为跳过、9 条改成按本机实测能力派生期望值后**仍然在跑**（不是跳过）。
+#
+# ── 第二次，2026-10-04（`f9f4737`）：前端 job 通过；后端 job 前面每一步
+#    （安装依赖 / 安装 HEIC 支持 / 安装 LibreOffice / 自检组件）**全部 success**，
+#    只有「跑测试」failure。**这一次不是缺组件** —— 按 runner 的同一组件状态
+#    （LibreOffice 有、pillow-heif 有、OCR 没有）在本机复现得到
+#        1611 passed / 21 skipped / 0 failed
+#    全绿。所以失败是 Linux/runner 环境特有的，原因待查（日志正文要仓库管理员
+#    权限才下得到，只能靠上面的注解与摘要通道把失败用例名带出来）。
+#
+#    两次跑的共同点：**都只红在「跑测试」这一步**。所以下面那些装组件、
+#    自检的步骤在真实 runner 上确实能用（实测确认，不必再怀疑）。
 
 # 覆盖率：装完 LibreOffice 与 pillow-heif（见下面那三步）之后，CI 上真正
 # 跳过的只剩 **OCR** 那一批，约 4 条。也就是说：
@@ -46,9 +60,17 @@ name: CI
 #    在你用的 runner 上还没有 3.14，会在 setup-python 那一步直接报
 #    「版本不存在」，与测试无关。
 #
-#    刻意**没有**顺手把 actions/checkout@v4、setup-python@v5 升到最新：
-#    那会在同一次提交里混进第二个未验证的变量。首次跑出问题时，
-#    要能确定是哪里红的。
+#    actions 版本**只升到「换用 Node 24」的那一档**，没跟到最新的 v7：
+#      checkout v4→v5 / setup-python v5→v6 / setup-node v4→v5
+#    起因是 2026-10-04 那次跑的注解：
+#      「Node.js 20 is deprecated. The following actions target Node.js 20
+#        but are being forced to run on Node.js 24: actions/checkout@v4,
+#        actions/setup-python@v5.」
+#   原本这里刻意停在 v4/v5，是为了让首次跑出问题时能确定是哪里红的。
+#   那个目的已经达到（首跑与第二跑都只红在「跑测试」），所以现在补上。
+#   之所以不跟到 v7：逐个查过这三家的 action.yml，用 node24 的**最小**大版本
+#   恰好就是上面这三个，各跨一个大版本；跟到 v7 是跨 2–3 个，多出来的
+#   变动对「消掉这条弃用警告」没有贡献。
 
 # ⚠️ CI 里刻意**不跑** scripts/verify_phase*.py：那批脚本要真实 Chromium、
 #    要 LibreOffice、要一个常驻的后端进程，12 步串行跑满约 15 分钟，而且
@@ -68,9 +90,9 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.14"
           cache: pip
@@ -143,10 +165,54 @@ jobs:
 
       # -o addopts= 是必须的：pytest.ini 里写了 addopts = -q，
       # 不加这个覆盖就没法在命令行上再给别的参数。
-      # -rs 把跳过原因打出来：OCR / HEIC 的用例在 runner 上会跳过，
+      # -rs 把跳过原因打出来：OCR 的用例在 runner 上会跳过，
       # 「全绿」必须和「跳了多少、为什么跳」一起读（见文件头的说明）。
+      #
+      # 输出改成先落盘再转发，是为了**红的时候能把失败用例名带出去**：
+      # 日志正文下载要仓库管理员权限，而下面两条通道不用 ——
+      #   ① ::error:: 工作流命令 → check-run 的 annotations，
+      #      实测可匿名读（GET /repos/{o}/{r}/check-runs/{id}/annotations）；
+      #   ② $GITHUB_STEP_SUMMARY → job 页面右上角的摘要。
+      # 两条都写：注解是给机器读的那份（我据此定位），摘要是给人读的那份。
+      # 这也是 2026-10-04 那次「只知道红在跑测试、不知道红在哪条」的教训 ——
+      # 当时只能靠本机复现，而那次复现出来是全绿，等于白跑。
       - name: 跑测试
-        run: python -m pytest -o addopts= -q -rs
+        run: |
+          LOG="$RUNNER_TEMP/pytest.log"
+          set +e
+          python -m pytest -o addopts= -q -rs > "$LOG" 2>&1
+          code=$?
+
+          if [ "$code" -ne 0 ]; then
+            FAILED=$(grep -E '^(FAILED|ERROR)' "$LOG" | head -20)
+
+            if [ -n "$FAILED" ]; then
+              # 消息里的 % 要转义，否则工作流命令会把它当成转义序列的开头。
+              while IFS= read -r line; do
+                echo "::error title=pytest 失败::$(printf '%s' "$line" | sed 's/%/%25/g')"
+              done <<< "$FAILED"
+            fi
+
+            {
+              echo "## pytest 失败（exit $code）"
+              echo
+              echo '```'
+              echo "$FAILED"
+              echo '```'
+              echo
+              echo "<details><summary>日志末尾 60 行</summary>"
+              echo
+              echo '```'
+              tail -60 "$LOG"
+              echo '```'
+              echo
+              echo '</details>'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # 末尾照样打到步骤日志里：不红的时候这就是全部的可见输出。
+          tail -40 "$LOG"
+          exit $code
         env:
           PYTHONIOENCODING: utf-8
 
@@ -157,11 +223,11 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # 版本从仓库根的 .nvmrc 读，不再写死在这里 —— 免得 CI 的 Node 版本
       # 和本地 nvm/fnm 用的对不上，出现「本地能过 CI 不过」这种最难查的分歧。
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
           cache: npm
