@@ -480,6 +480,34 @@ class Settings:
         "noto": ("Noto Sans CJK", ("NotoSansCJK-Regular.ttc", "NotoSansCJKsc-Regular.otf")),
         "wqy": ("文泉驿正黑", ("wqy-zenhei.ttc",)),
     }
+    # PyMuPDF **读不动**的字体文件：探测时跳过该文件名，继续试这个字体键的
+    # 下一个候选（见 office/txt_to_pdf.py::available_fonts）。
+    #
+    # 这不是「Noto 不好」，是 **MuPDF 读不了这个集合**。NotoSansCJK-Regular.ttc
+    # 也正是 Ubuntu 上 fonts-noto-cjk 装的那一个（/usr/share/fonts/opentype/noto/），
+    # 所以 Linux 机器基本都会踩到。拿了真字体在本机实测，MuPDF 会报：
+    #     MuPDF error: format error: Index bounds
+    # 后果两条，**都是静默的** —— 用户那边看不到任何报错：
+    #   1. ``doc.subset_fonts()`` 失效：一页中文 **13.7 MB** 而不是 10 KB。
+    #      实测 13,726,876 → 13,726,876 字节，纹丝不动（换 fontbuffer 也一样）。
+    #   2. 抽出来的字被换掉：U+0020 → U+00A0（不换行空格）、U+002D → U+2011
+    #      （非断字连字符）。因为该字体把这两对字符映射到**同一个字形**
+    #      （``Font.has_glyph`` 对两者返回同一字形 id：空格与 NBSP 都是 1，
+    #      连字符与非断连字符都是 14），反查 cmap 建 ToUnicode 时挑中了
+    #      不换行的那个。复制出去的字看着一样，却搜不到、比对不上。
+    #   3. 附带一处更隐蔽的：HTML/Markdown 里的引用块文字**整段消失**。
+    #
+    # 跳过之后这台机器会落到 TXT_FALLBACK_FONT 上，而内置字体实测三条都正常
+    # （1,703,416 → 10,046 字节，抽出文字与输入逐字相同，引用块也在），
+    # 中文覆盖靠 Droid Sans Fallback，够用。
+    #
+    # 只在**文件名**上拦、不做运行期试排：试排要给每个候选字体各建一份临时
+    # PDF，启动开销不值当。候选表里第二个文件名 NotoSansCJKsc-Regular.otf
+    # **不在**这个表里 —— 它不是集合，实测 CFF 单体子集化正常。
+    TXT_FONT_FILES_PYMUPDF_CANNOT_READ: frozenset[str] = frozenset(
+        {"notosanscjk-regular.ttc"}
+    )
+
     # 内置回退字体（PyMuPDF 自带，不需要任何字体文件）。
     # 标签只写「内置字体」，不写成「内置黑体」之类：内置的几个中文码实测都指向
     # Droid Sans Fallback，标成宋体或黑体都是假话。

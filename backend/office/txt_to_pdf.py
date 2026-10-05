@@ -193,6 +193,11 @@ def available_fonts() -> list[TxtFont]:
     fonts: list[TxtFont] = []
     for key, (label, candidates) in settings.TXT_FONT_CANDIDATES.items():
         for name in candidates:
+            # 文件在、但 PyMuPDF 读不动 —— 跳过的**是这个文件**，不是这个字体键：
+            # 还有下一个候选文件名可以试。为什么某个文件会被拦，见
+            # settings.TXT_FONT_FILES_PYMUPDF_CANNOT_READ 上面那段实测记录。
+            if name.lower() in settings.TXT_FONT_FILES_PYMUPDF_CANNOT_READ:
+                continue
             path = files.get(name.lower())
             if path is not None:
                 fonts.append(TxtFont(key=key, label=label, path=path))

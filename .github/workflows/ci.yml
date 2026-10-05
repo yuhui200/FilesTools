@@ -21,6 +21,22 @@ name: CI
 #
 #    两次跑的共同点：**都只红在「跑测试」这一步**。所以下面那些装组件、
 #    自检的步骤在真实 runner 上确实能用（实测确认，不必再怀疑）。
+#
+# ── 第四次，2026-10-05（`3cb3442`）：注解终于带出了失败用例名（上一版把
+#    pytest 参数写成 `-rs`，把默认的 `-rfE` 顶掉了，等于空转）。14 条失败。
+#    其中 **13 条同一个根因，而且是我自己引进来的**：装 `fonts-noto-cjk`
+#    之后，它装的 `NotoSansCJK-Regular.ttc` 命中了 config 里 `noto` 的第一
+#    候选文件名，于是 TXT→PDF 与 Markdown/HTML→PDF 一起改用它，而 MuPDF
+#    读不了这个集合 —— 子集化静默失效（13.7 MB）且抽出来的字被换成
+#    NBSP / 非断连字符，引用块整段消失。修法见
+#    `backend/config.py::TXT_FONT_FILES_PYMUPDF_CANNOT_READ`。
+#    第 14 条（`test_corrupt_document_reports_the_corrupt_message` 期望 400、
+#    runner 给 422）**不是字体引起的**，机制已定位到
+#    `services/office_converter.py` 押在 soffice 退出码上，尚未修。
+#
+#    ⚠️ 所以：**这个 job 的「红」不都是环境问题**。装了新组件之后，它可能
+#    改变代码在 Linux 上的**默认选择**（这次是默认字体），把生产行为改坏，
+#    而本机因为装了别的字体完全看不到。加组件时要想到这一层。
 
 # 覆盖率：装完 LibreOffice 与 pillow-heif（见下面那三步）之后，CI 上真正
 # 跳过的只剩 **OCR** 那一批，约 4 条。也就是说：
@@ -204,16 +220,20 @@ jobs:
               TOTAL="?"
             fi
 
-            # 逐条发，但**只发前 8 条**：注解在 Actions 界面上能显示的条数
-            # 有上限（官方那页没写明数字），失败一多就会溢出。溢出时必须让
-            # 「还有更多条」这件事本身看得见，否则又会退回「只知道红了、
-            # 不知道红在哪」——下面那一条就是说这个的。
-            printf '%s\n' "$LIST" | head -8 | while IFS= read -r line; do
+            # 逐条发，但**只发前 20 条**：注解在 Actions 界面上能显示的条数
+            # 有上限（官方那页没写明数字），失败一多就会溢出。
+            #
+            # 总数**放在名单前面**发：万一真的溢出被截掉，先丢的也是名单尾部，
+            # 而「总共几条」这条信息不会跟着一起没 —— 那样才知道自己看到的
+            # 是不是全部。2026-10-05 那次只看到 14 条里的 8 条，就是这么卡的
+            # （当时上限写的是 8）。
+            SHOWN=20
+            if [ "$TOTAL" != "?" ] && [ "$TOTAL" -gt "$SHOWN" ]; then
+              echo "::error title=pytest 失败::本次共 $TOTAL 条失败/错误，下面只逐条列前 $SHOWN 条；完整清单在步骤摘要里"
+            fi
+            printf '%s\n' "$LIST" | head -"$SHOWN" | while IFS= read -r line; do
               [ -n "$line" ] && echo "::error title=pytest 失败::$(printf '%s' "$line" | sed 's/%/%25/g')"
             done
-            if [ "$TOTAL" != "?" ] && [ "$TOTAL" -gt 8 ]; then
-              echo "::error title=pytest 失败::共 $TOTAL 条失败/错误，上面只逐条列了前 8 条；完整清单在步骤摘要里"
-            fi
 
             {
               echo "## pytest 失败（exit $code，共 $TOTAL 条）"

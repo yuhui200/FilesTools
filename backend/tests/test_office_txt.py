@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import pymupdf
 import pytest
@@ -96,6 +97,43 @@ def test_font_keys_are_ascii() -> None:
     """字体键要当表单值传，必须是 ASCII；中文显示名放在 label 里。"""
     for item in available_fonts():
         assert item.key.isascii(), f"字体键不是 ASCII：{item.key!r}"
+
+
+def test_fonts_pymupdf_cannot_read_are_skipped_not_offered(monkeypatch) -> None:
+    """MuPDF 读不动的字体文件不许被列出来 —— 列出来就是个静默的坏选项。
+
+    起因是 2026-10-05 的 CI：Ubuntu 装了 fonts-noto-cjk 之后，Linux 上
+    ``available_fonts()[0]`` 变成 NotoSansCJK-Regular.ttc，于是
+    TXT→PDF / Markdown→PDF 两条路一起坏 —— 一页中文 13.7 MB（子集化静默
+    失效），抽出来的字被换成 U+00A0 / U+2011，引用块整段消失。
+    本机没有那个文件，所以用桩把它摆进来。
+
+    ``test_available_fonts_are_usable`` 拦不住这个：那个文件**能**加载、
+    也有字体名，只是排出来的东西是坏的。所以这里要单独钉一条。
+    """
+    blocked = settings.TXT_FONT_FILES_PYMUPDF_CANNOT_READ
+    assert blocked, "拦截表是空的？那 NotoSansCJK 那个坑就原样回来了"
+
+    # 候选表里 Noto 的第一个文件名，正是实测读不动的那个。它要是被改掉了，
+    # 这条断言会红 —— 提醒改的人回去重新实测一遍，别照抄结论。
+    ttc, otf = settings.TXT_FONT_CANDIDATES["noto"][1][:2]
+    assert ttc.lower() in blocked, f"Noto 的首选文件名 {ttc!r} 不在拦截表里"
+
+    monkeypatch.setattr(txt_to_pdf, "_font_cache", None)
+    monkeypatch.setattr(
+        txt_to_pdf, "_scan_font_files", lambda: {ttc.lower(): Path("/nowhere") / ttc}
+    )
+    fonts = available_fonts()
+    assert [item.key for item in fonts] == [settings.TXT_FALLBACK_FONT], (
+        f"读不动的字体被列出来了，或者没落到内置字体上：{[i.key for i in fonts]}"
+    )
+
+    # 拦的是**那个文件**，不是「noto」这个字体键：只有单体 .otf 时仍该可选。
+    monkeypatch.setattr(txt_to_pdf, "_font_cache", None)
+    monkeypatch.setattr(
+        txt_to_pdf, "_scan_font_files", lambda: {otf.lower(): Path("/nowhere") / otf}
+    )
+    assert [item.key for item in available_fonts()] == ["noto"]
 
 
 def test_falls_back_to_builtin_when_no_system_font_is_found(monkeypatch) -> None:
