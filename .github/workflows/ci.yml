@@ -37,6 +37,31 @@ name: CI
 #    ⚠️ 所以：**这个 job 的「红」不都是环境问题**。装了新组件之后，它可能
 #    改变代码在 Linux 上的**默认选择**（这次是默认字体），把生产行为改坏，
 #    而本机因为装了别的字体完全看不到。加组件时要想到这一层。
+#
+# ── 第五次，2026-10-05（`a6e6298`）：修掉字体之后剩 **3 条**，`fonts-noto-cjk`
+#    那条根因确实清了（13 条一起没了）。剩下的是
+#        test_office_converter.py::test_corrupt_document_reports_the_corrupt_message
+#        test_office_api.py::test_corrupt_document_reports_the_corrupt_message
+#        test_system_api.py::test_system_api_can_be_switched_off_entirely
+#    前两条是 400 vs 422（已在最终收尾那一轮真正修掉，不再押 soffice 退出码）。
+#
+# ── 第六次，2026-10-08（`ccd322f`）：只剩 **1 条**，就是上面第三条：
+#        FAILED tests/test_system_api.py::test_system_api_can_be_switched_off_entirely
+#          AssertionError: ('/api/system/workers', {'status': 404, 'content_type': 'application/json'})
+#    **这条是本文件这一路上唯一一条真正针对「测试自身写错」的红**，而且它
+#    在前五次里每次都在（只是被更多条盖住了），本机却永远绿 —— 因为它验的是
+#    「接口关掉之后收到什么」，而那取决于**部署形态**：
+#      * 本机 `frontend/dist` 一直在（`npm run build` 的产出，且被 gitignore），
+#        main.py 于是挂了 SPA 兜底，未匹配路径回落到 index.html → 200 text/html；
+#      * 本 job 只 checkout 后端、从不构建前端 → 没有 dist → 没挂兜底 →
+#        FastAPI 自己那条 404，content-type 就是 application/json。
+#    而旧断言写的是 `"application/json" not in content_type` —— 它把
+#    「不是我们的载荷」错写成了「响应里不许有 JSON」，于是把 FastAPI 的通用
+#    404 误判成「接口还在」。两种形态都是真部署（Dockerfile 有
+#    `COPY frontend/dist/`，裸 uvicorn 跑未构建前端的检出则是纯 API），
+#    所以修法是**两种形状各自钉死**（404 时 body 必须恰好是
+#    `{"detail":"Not Found"}`；200 时必须确实是那份 HTML 外壳），比原来更严。
+#    本机用「把 frontend/dist 挪走」复现过，改前红、改后绿，两种形态都跑过。
 
 # 覆盖率：装完 LibreOffice 与 pillow-heif（见下面那三步）之后，CI 上真正
 # 跳过的只剩 **OCR** 那一批，约 4 条。也就是说：

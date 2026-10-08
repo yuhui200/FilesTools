@@ -648,6 +648,13 @@ with TestClient(main.app) as client:
         http[path] = {
             "status": response.status_code,
             "content_type": response.headers.get("content-type", ""),
+            # body 一起带回来。关掉开关之后收到什么取决于**部署形态**（见下面那条
+            # 测试），只有拿到 body 才能钉死「应答的不是我们的接口」，而不是笼统地
+            # 「响应里没有 JSON」—— 后者会把 FastAPI 自己的那条通用 404 误判成
+            # 接口还在（CI 上就是这么红的）。
+            # 4000 是量出来的余量：index.html 外壳约 1.1 KB，而它最后一行
+            # （<div id="root">）正是下面要断言的锚点 —— 截太短会把它切掉。
+            "body": response.text[:4000],
         }
 print("PROBE=" + json.dumps({
     "paths": sorted(p for p in main.app.openapi()["paths"] if p.startswith("/api/system")),
@@ -695,12 +702,18 @@ def test_system_api_can_be_switched_off_entirely() -> None:
     **一处与计划书不符的实情**（探针查出来的，不是猜的）：计划书写的是
     「404」，但生产形态下后端顺带托管着 ``frontend/dist``，那个 SPA 兜底
     会把**所有**未匹配的路径回落到 ``index.html``。所以关掉之后真实响应是
-    ``200 text/html``（774 字节的静态外壳），而不是 404 —— 这与
+    ``200 text/html``（一份 index.html 外壳），而不是 404 —— 这与
     ``/api/随便什么`` 今天的行为完全一致，不是这个开关的特例。
     没挂前端（纯 API 部署）时才是真的 404。
 
-    两种情况下要的东西是一样的：**API 面消失**。所以这里断言的是
-    「响应不是我们的 JSON」，而不是一个会随部署形态变化的数字。
+    于是「接口没了」这件事在**两种部署形态**下有两种样子，两种都得钉死：
+    挂了 SPA 兜底的是 ``200 text/html``，没挂的是 FastAPI 自己那条
+    ``404 application/json``（body 固定 ``{"detail":"Not Found"}``）。
+    **后者那条 JSON 不是我们的载荷**，恰恰是「没有这个路由」的通用回应 ——
+    所以判据不能是「响应里不许出现 application/json」。本机因为
+    ``frontend/dist`` 一直在（``npm run build`` 的产出），走的永远是 SPA 那条路，
+    这个错判据挂了很久都没露出来；CI 的 backend job 不构建前端，2026-10-08
+    第一次把它顶红（``ccd322f``），才查到这里。
     """
     on = probe_system_api(enabled=True)
     assert on["paths"] == ["/api/system/metrics", "/api/system/workers"]
@@ -711,8 +724,19 @@ def test_system_api_can_be_switched_off_entirely() -> None:
     off = probe_system_api(enabled=False)
     assert off["paths"] == []
     for path, info in off["http"].items():
-        assert "application/json" not in info["content_type"], (path, info)
-        assert info["status"] in (200, 404), (path, info)
+        # 两种部署形态各自钉死形状。这比原来**更严**：原来 200 那条只要求
+        # 「不是 JSON」，现在要求它确实是那份 HTML 外壳；404 那条原来只要求
+        # 「不是 JSON」，现在把 body 精确到 FastAPI 那句固定文案。
+        if info["status"] == 404:
+            # 纯 API 部署：FastAPI 自己的通用 404。body 必须**正好**是它，
+            # 用来证明应答的不是我们的接口。
+            assert info["body"] == '{"detail":"Not Found"}', (path, info)
+            assert "text/html" not in info["content_type"], (path, info)
+        else:
+            # 生产形态：SPA 兜底给的 index.html 外壳。
+            assert info["status"] == 200, (path, info)
+            assert "text/html" in info["content_type"], (path, info)
+            assert '<div id="root">' in info["body"], (path, info)
 
 
 def test_process_level_metrics_singleton_is_the_one_serving_http(client: TestClient) -> None:

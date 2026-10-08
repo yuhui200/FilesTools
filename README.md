@@ -2404,7 +2404,7 @@ VITE_BACKEND_URL=http://192.168.1.10:8000 npm run dev
 
 ### 后端单元 / 接口测试
 
-后端有 **1633 项测试**，覆盖十一个阶段全部功能的正常流程、边界情况和安全校验：
+后端有 **1645 项测试**，覆盖十一个阶段全部功能的正常流程、边界情况和安全校验：
 
 ```bash
 cd backend
@@ -2415,11 +2415,14 @@ pytest -o addopts= -q
 预期输出：
 
 ```text
-1633 passed
+1645 passed
 ```
 
 > `pytest.ini` 里设了 `addopts = -q`，上面的 `-o addopts=` 是把它临时清掉，
 > 这样能拿到每个文件的明细。不加也能跑，只是输出会简略一些。
+>
+> **上面的 1645 是「一个都没跳过」时的数** —— 即 LibreOffice、pillow-heif、OCR 组件都在的机器。
+> 少哪个组件，`passed` 就会相应少几条、`skipped` 多几条，两者相加仍是 1645。
 >
 > 其中需要真正调用 LibreOffice 的用例带 `@requires_soffice` 标记：机器上没装 LibreOffice 时
 > 它们会 **skip** 而不是 fail（没装组件的机器不该因为「装不了的东西」变红）。
