@@ -17,6 +17,9 @@
   不是只写在代码里。
 - 新增 `scripts/verify_final.py` 作为**最终总验收入口**：环境够不着的项输出 `NOT EXECUTED`
   并写明原因，**绝不写成 PASS**。
+- **CI 在 2026-10-08 首次全绿**（此前连着六次红）。修掉的那条是**测试自己的判据**写错了 ——
+  它把「响应里不许出现 `application/json`」当成了「接口还在」的判据，而关掉接口之后收到什么
+  其实取决于**部署形态**（有没有前端产物）。详见 [CI 覆盖什么](#ci-覆盖什么)。
 
 **四平台产品：Web / Android / iOS / Windows。** 完整的逐项矩阵见[四平台总览](#四平台总览)，
 环境受限的两项（Android 真机、iOS）在那里如实标出。
@@ -1213,6 +1216,28 @@ iOS configuration
   另有 AVD `filetools11a`（Android 15 / x86_64）上的原生路径实测记录 —— 真实转换、
   真实下载、真实分享都走通了，结果文件名也是对的。**但没有一份独立的物理设备验收**，
   所以矩阵里是 ⚠️ / VERIFY，不是 ✅。
+
+#### 最终验收结论复核（2026-10-08）
+
+最终收尾那一轮（2026-10-07）的结论**又整取了一遍证**。之所以要重取：此后代码变过**一个**提交
+（`35493be`），它只动测试判据、CI 注释与本文的条数，**生产代码一行未动** —— 下面每一格都是当场实测，
+不是从上一轮的报告里抄的。
+
+| 项 | 实测读数 | 取证时间 |
+| --- | --- | --- |
+| 后端 pytest | **1645 passed / 0 failed / 0 skipped** | 10-08 15:45 |
+| 冻结回归（22 步严格串行，`/tmp/ft-regress-final.sh`，sha256 `e1f1a744…`） | **PASS=22 FAIL=0** | 10-08 15:45–16:04 |
+| `scripts/verify_final.py` | **96 / 96，FAILED 0，4 项 NOT EXECUTED** | 10-08 16:04 |
+| `scripts/verify_branding.py` | **103 / 103** | 10-08 15:48 |
+| `scripts/verify_desktop.py`（含真跑一次 Tauri 构建） | **48 / 48** | 10-08 15:50 |
+| Rust 单元测试 `cargo test --lib` | **13 passed / 0 failed** | 10-08 |
+| **GitHub Actions CI** | **两个 job 都 `success`** —— **七次跑里首次全绿** | 10-08 16:08 |
+| 卸载残留（`%LOCALAPPDATA%\FileTools` / 桌面快捷方式 / 开始菜单 / `HKCU` 卸载项） | **四项全空** | 10-08 |
+
+**结论不变，仍是 `FINAL HARDENING PASSED` ＋ `Environment-limited verification`。**
+那 4 项 `NOT EXECUTED` 到本轮为止**依然关着**，而且不是「没做」：本机没有 docker、
+不是 macOS、`adb devices` 是空的（没有物理设备）、`rustup` 只装了 `x86_64-pc-windows-msvc`。
+**它们不算通过**，所以上表最后不写「四个平台全部验证完毕」。
 
 ---
 
@@ -2488,6 +2513,29 @@ CI 里**刻意不跑** `scripts/verify_phase*.py` —— 那一批要真实 Chro
 >   在 Linux 上是 **0**。**押平台相关的信号做业务归类，等于把平台差异写进了用户看到的文案。**
 >   修法的关键是换成一条与平台无关的判据（源文件的主部件是不是良构 XML），
 >   并把 Linux 的那种返回**写成一条不依赖 LibreOffice 的测试**，这样在任何机器上都能复现那条缝。
+> - **判据也别押在部署形态上。** 最后一条红（`test_system_api_can_be_switched_off_entirely`）
+>   从**第一次跑 CI 起每次都在**，本机却永远绿 —— 它验的是「接口关掉之后收到什么」，
+>   而那取决于**这台机器上有没有前端产物**：本机 `frontend/dist` 一直在，后端于是挂了 SPA 兜底，
+>   未匹配路径回落到 `index.html`（`200 text/html`）；CI 只 checkout 后端、从不构建前端，
+>   没有 dist 就没挂兜底，收到的是 FastAPI 自己那条通用 404（`application/json`）。
+>   旧断言写的是「响应里不许出现 `application/json`」，等于把**「收到的不是我们的载荷」**
+>   错写成**「响应里不许有 JSON」**。两种形态都是真部署，所以修法是**两种形状各自钉死**
+>   （404 时 body 必须恰好是 `{"detail":"Not Found"}`；200 时必须确实是那份 HTML 外壳）。
+
+**结果：这份工作流在 2026-10-08 首次全绿。** 从 `819e690`（09-29）到 `ccd322f`（10-08）
+连着六次红，第七次（`35493be`）两个 job 都是 `success`
+（[run 37747877362](https://github.com/yuhui200/FilesTools/actions/runs/37747877362)）。
+
+六次红可以归成两类，**两类都不是「代码随手写错了」**：
+
+- **运行环境差异** —— runner 缺组件（LibreOffice / OCR）、CI 自己装的 `fonts-noto-cjk`
+  改变了 Linux 上的默认字体。这类红的特征是**本机复现不出来**。
+- **押了平台 / 部署相关的信号做判断** —— 损坏文档押 `soffice` 退出码、接口开关押部署形态。
+  这一类是**真缺陷**，而且是两条：一条在生产代码里（`_source_could_not_be_loaded`），
+  一条在测试的判据里。**本机各自只看得到一半**，所以两边都长期以为对方是绿的。
+
+诊断通道（`::error::` 注解 + 步骤摘要，见 `ci.yml` 文件头）就是被这条路上「只知道红在跑测试、
+不知道红在哪一条」逼出来的 —— 日志正文要仓库管理员权限才下得到，而注解谁都读得到。
 
 ### 真实浏览器 / 真机验收
 
@@ -2509,9 +2557,9 @@ CI 里**刻意不跑** `scripts/verify_phase*.py` —— 那一批要真实 Chro
 | `scripts/verify_phase10a.py` | 73 / 73 | 高级图片引擎的浏览器端 |
 | **`scripts/verify_phase10.py`** | **210 / 210** | **第十阶段封板入口**，11 个分段（A 24 / B 21 / C 13 / D 11 / E 14 / F 15 / G 15 / H 10 / I 12 / J 33 / G3 42） |
 | **`scripts/verify_mobile_phase11a.py`** | **107 / 107** | **第十一阶段 A 封板入口**，5 个分段（A 反漂移 25 / B 与真服务器对账 8 / C 三条真实链路 19 / D 界面行为 36 / E 任务生命周期：取消与重试 19） |
-| **`scripts/verify_branding.py`** | **全绿** | 品牌验收：唯一真源、四平台图标尺寸与像素、App 名、版本一致性、`Dockerfile` 的 `COPY VERSION` |
+| **`scripts/verify_branding.py`** | **103 / 103** | 品牌验收：唯一真源、四平台图标尺寸与像素、App 名、版本一致性、`Dockerfile` 的 `COPY VERSION` |
 | **`scripts/verify_desktop.py`** | **48 / 48** | 桌面验收：Tauri 配置、标识符、版本、Windows 图标，**并真的跑了一次 Tauri 构建** |
-| **`scripts/verify_final.py`** | **91 / 91** | **最终总验收入口**：版本 / 品牌 / 单一真源 / Web / 后端 / 移动 / 桌面 / 脚本齐备的横切检查。环境够不着的项（docker build、iOS 构建、Android 真机、ARM64）输出 `NOT EXECUTED` 并写明原因，**不写成 PASS** |
+| **`scripts/verify_final.py`** | **96 / 96**（另 4 项 `NOT EXECUTED`） | **最终总验收入口**：版本 / 品牌 / 单一真源 / Web / 后端 / 移动 / 桌面 / 脚本齐备的横切检查。环境够不着的项（docker build、iOS 构建、Android 真机、ARM64）输出 `NOT EXECUTED` 并写明原因，**不写成 PASS** |
 | 桌面端安装包 **真机装一遍** | **通过** | 走完向导逐页核对 → 装 → 开 → 卸载，安装目录 / 两个快捷方式 / 注册表项全部清除 |
 
 跑法（以第十阶段为例）：
