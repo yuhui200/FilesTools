@@ -90,8 +90,9 @@ REQUIRED_SCRIPTS = (
     "verify_phase10.py", "verify_phase10a.py",
     "verify_phase9a_live.py", "verify_markup_live.py", "verify_text_live.py",
     "verify_branding.py", "verify_desktop.py", "verify_mobile_phase11a.py",
-    "verify_final.py",
+    "verify_final.py", "verify_release.py",
     "generate_branding.py", "sync_version.py", "build_windows.py",
+    "build_release.py",
 )
 
 #: 安全相关的那几个测试模块。它们**存在**是底线；真的跑没跑由 pytest 那一轮回答，

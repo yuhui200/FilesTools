@@ -47,3 +47,19 @@ Thumbs.db
 scripts/*_report.txt
 # 历史验收的临时工作目录（下载的产物、生成的素材、解开的 zip）
 .accept-work/
+
+# 发行暂存树 release/<版本>/ 里的**大二进制**。
+#
+# 分成两半是刻意的：文本那半（RELEASE-NOTES.md / RELEASE-MANIFEST.json /
+# SHA256SUMS.txt）**进库** —— 它们是这次发行「发了什么、从哪个提交发的、
+# 哈希是多少」的记录，丢掉就无从追溯；二进制那半不进库 —— 安装包与 APK
+# 都好几 MB，塞进 git 只会让仓库越滚越大，而且它们随时能用
+# scripts/build_release.py 从构建产物重新收敛出来。
+#
+# 注意：这里的忽略**不**适用于 desktop/artifacts/（那条在上面，仍然生效），
+# 两处是各自独立的规则。
+release/**/*.exe
+release/**/*.apk
+release/**/*.aab
+release/**/*.ipa
+release/**/*.zip

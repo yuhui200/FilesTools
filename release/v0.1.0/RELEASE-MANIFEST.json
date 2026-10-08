@@ -1,0 +1,49 @@
+{
+  "product": "FileTools",
+  "version": "0.1.0",
+  "generated_at": "2026-10-08T17:00:30+08:00",
+  "git": {
+    "commit": "604f1440228faab3a543d273dfbd5f882b478c65",
+    "branch": "main",
+    "dirty": true
+  },
+  "artifacts": [
+    {
+      "platform": "web",
+      "file": "web/FileTools-Web-0.1.0.zip",
+      "bytes": 147606,
+      "sha256": "4ed56f97cebb1f12dce5876f40d058fad1451d670901dfd3778656717d2714c0",
+      "kind": "静态站点（由后端托管，也可独立部署）",
+      "signed": null,
+      "detail": "frontend/dist 的 12 个文件，确定性 zip（时间戳钉在 1980）"
+    },
+    {
+      "platform": "windows",
+      "file": "windows/FileTools-Setup-x64.exe",
+      "bytes": 3478510,
+      "sha256": "3edf54653224bb34bd81c14866438b8985d0aa5cf973166477c5ad45bbd4ebfd",
+      "kind": "NSIS 安装包（currentUser，免 UAC）",
+      "signed": "none",
+      "detail": "NSIS 安装器，仅 x64；与 Tauri 原始输出 FileTools_0.1.0_x64-setup.exe 逐字节相同"
+    },
+    {
+      "platform": "android",
+      "file": "android/FileTools-0.1.0-release.apk",
+      "bytes": 98875636,
+      "sha256": "2364bdf7ffaa6f52b1019e504a7973a4972f2a99053e3f3f385be49e7a722538",
+      "kind": "Android APK（含 4 个 ABI）",
+      "signed": "debug",
+      "detail": "由 `gradlew assembleRelease` 产出（构建于 D:\\filetools-build\\mobile\\android\\app\\build\\outputs\\apk\\release）；app/build.gradle 的 release 块用的是 signingConfigs.debug —— **debug keystore 签名，可安装、不可上架**"
+    }
+  ],
+  "not_built": [
+    {
+      "platform": "ios",
+      "reason": "本机没有 macOS，没有 Xcode —— 一行都构建不了"
+    },
+    {
+      "platform": "docker",
+      "reason": "本机没有可用的 docker（开发机是 Windows）"
+    }
+  ]
+}

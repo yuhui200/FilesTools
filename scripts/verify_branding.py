@@ -31,6 +31,7 @@ import hashlib
 import json
 import pathlib
 import re
+import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
@@ -681,18 +682,56 @@ def section_version() -> None:
 # ----------------------------------------------------------------------
 
 
+def git_ignored(paths: list[str]) -> set[str]:
+    """从 ``paths`` 里挑出被 ``.gitignore`` 排除的那些（用 git 自己的判断）。
+
+    §九 问的是「**仓库里**有没有游离的品牌资产」，而 ``walk()`` 走的是文件系统：
+    它靠一份**手维护的** ``SKIP_DIRS`` 排除依赖与构建产物，那份清单会和现实漂 ——
+    ``mobile/android/`` 是 ``expo prebuild`` 现场生成的脚手架，
+    ``mobile/.gitignore:41`` 把整个目录排除了、``git ls-files`` 一个都不跟踪，
+    它**不在仓库里**。把它的 ``splashscreen_logo.png``（Expo 从品牌图标生成的副本，
+    不是第二份真源）算成「游离资产」是假红。
+
+    所以这里不自己再维护一份忽略清单，直接问 git —— 它才是「什么在仓库里」的真相源。
+
+    两个坑都在这一行里，写下来免得下次又踩：
+
+    * **不能用 ``text=True``。** 它在 Windows 上会把写进 stdin 的 ``\\n``
+      翻译成 ``\\r\\n``，于是 git 收到的路径**末尾带 CR**，回显时按「含特殊字符的路径」
+      加上引号 —— 拿回来的字符串就跟候选路径对不上了。症状很有辨识度：
+      ``n`` 个路径里前 ``n-1`` 个脏、最后一个干净（``join`` 没给它尾随换行）。
+    * **用 ``-z``。** 它让输出以 NUL 分隔、且**不加引号**，本来就该拿它做机器可读的输出。
+      走字节、不走文本模式，翻译层就整个绕开了。
+    """
+    if not paths:
+        return set()
+    try:
+        done = subprocess.run(
+            ["git", "check-ignore", "--stdin", "-z"],
+            cwd=str(ROOT),
+            input=b"\0".join(p.encode("utf-8") for p in paths) + b"\0",
+            capture_output=True, timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {chunk.decode("utf-8", "replace") for chunk in done.stdout.split(b"\0") if chunk}
+
+
 def section_no_rogue_icons() -> None:
     section("§九 没有游离在品牌体系之外的图标/Logo")
 
     pattern = re.compile(r"(logo|icon|favicon)", re.IGNORECASE)
-    rogue: list[str] = []
+    candidates: list[str] = []
     for relative in walk({".png", ".ico", ".svg"}):
         posix = relative.as_posix()
         if not pattern.search(relative.name):
             continue
         if posix.startswith(IMAGE_ALLOWED_PREFIXES):
             continue
-        rogue.append(posix)
+        candidates.append(posix)
+
+    ignored = git_ignored(candidates)
+    rogue = [item for item in candidates if item not in ignored]
 
     check(
         not rogue,
@@ -700,6 +739,8 @@ def section_no_rogue_icons() -> None:
     )
     for item in rogue[:10]:
         note(f"游离的图标文件：{item}")
+    for item in sorted(ignored)[:10]:
+        note(f"跳过的生成物（被 .gitignore 排除，不在仓库里）：{item}")
 
     manifest = GENERATED / "manifest.sha256"
     if not manifest.exists():

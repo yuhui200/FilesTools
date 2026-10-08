@@ -28,6 +28,17 @@
 紧跟着还有一句 **`Environment-limited verification`**。逐项的结论、证据与**没做到的部分**
 写在下面的[当前支持平台](#当前支持平台)与[当前真实状态](#当前真实状态)两节里。
 
+**v0.1.0 发行打包（2026-10-08）**：三个平台的产物已经收进 `release/v0.1.0/`，
+配套的 `RELEASE-MANIFEST.json` / `SHA256SUMS.txt` / `RELEASE-NOTES.md` 一并就位，
+`scripts/verify_release.py` **48 / 48**。其中**Android 这一轮第一次出了真 APK**
+（`gradlew assembleRelease`，98,875,636 字节，含 arm64-v8a / armeabi-v7a / x86 / x86_64 四个 ABI）
+—— 它是 **debug keystore 签名的**：能装、能用，**不能上架**，清单里如实写 `signed: "debug"`。
+iOS 与 Docker 这一轮**没有产物**（本机不是 macOS、没有 docker），照实写进清单的 `not_built`。
+
+> **这一步刻意停住了：没有打 tag、没有 push、没有建 GitHub Release。** 发行是三件事里
+> 唯一对外不可逆的一件，等仓库主人自己确认后再做。本轮交付的是**可发布的暂存树**，
+> 不是已经发出去的东西。
+
 ---
 
 上一轮：**第十一阶段 A 的补充需求已完成（PHASE 11A-DESKTOP COMPLETE）** ——
@@ -61,6 +72,7 @@
 - [批量处理与任务队列](#批量处理与任务队列)
 - [移动 App（Expo / React Native）](#移动-appexpo--react-native)
 - [Windows 桌面版（Tauri）](#windows-桌面版tauri)
+- [发行打包](#发行打包)
 - [品牌资产](#品牌资产)
 - [四平台总览](#四平台总览)
 - [技术栈](#技术栈)
@@ -109,6 +121,42 @@
 >
 > 桌面版**没有引入任何新的 Python 或前端运行时依赖**：前端仍然零新增 npm 包
 > （Tauri 的 API 由 `withGlobalTauri` 暴露成全局对象），新增的只有 Tauri 这条构建链。
+
+**只有构建 Android APK 才需要的组件**（跑 App 用 Expo Go 不需要，只有自己出 APK 才需要）：
+
+| 组件 | 版本 | 本项目验证环境 | 说明 |
+| --- | --- | --- | --- |
+| JDK | 17 及以上 | 21.0.11 | Gradle 的编译器；设 `JAVA_HOME` |
+| Android SDK Platform | 36 | android-36 | RN 0.86.3 要求 `compileSdk 36`，装 35 会直接失败 |
+| Android SDK Build-Tools | 36.0.0 | 36.0.0 | — |
+| Android NDK | 27.1.12297006 | 27.1.12297006 | 由 Gradle 按版本目录自动下载，约 2.3 GB |
+| Android SDK Command-line Tools | — | 已装 | 提供 `sdkmanager.bat` / `adb` |
+
+用 SDK 自带的 `sdkmanager` 装（**不需要 Android Studio**）：
+
+```powershell
+$env:ANDROID_HOME = "D:\Android\Sdk"
+& "$env:ANDROID_HOME\cmdline-tools\latest\bin\sdkmanager.bat" `
+    "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+```
+
+**⚠️ 构建目录必须是纯 ASCII 路径。** Android Gradle Plugin 会直接拒绝含非 ASCII 字符的
+项目路径（`Your project path contains non-ASCII characters`），而本仓库住在 `D:\系统\FileTools`。
+用 `subst` 映射一个盘符**不能**绕开 —— React Native 的 codegen 会在 `X:\…` 与 `D:\系统\…`
+之间算相对路径，两个根不一致就抛 `this and base files have different roots`。
+所以 Android 的构建**真的要在纯 ASCII 路径下进行**：把 `mobile/` 复制过去再编，例如
+
+```powershell
+robocopy "D:\系统\FileTools\mobile" "D:\filetools-build\mobile" /E /MT:32
+cd D:\filetools-build\mobile\android
+.\gradlew assembleRelease
+```
+
+`scripts/build_release.py` 会到 `D:\filetools-build\mobile` 找 APK（见该脚本里
+`ANDROID_APK_CANDIDATES` 的注释）。
+
+> 本项目的做法是**绝不用 `android.overridePathCheck=true` 把这条检查关掉** ——
+> 关掉检查不等于问题消失，只是把失败推迟到更难查的地方。
 
 ### LibreOffice 安装要求
 
@@ -1010,6 +1058,43 @@ Tauri 的原生产物名固定是 `FileTools_<版本>_x64-setup.exe`，**没有�
 
 ---
 
+## 发行打包
+
+```bash
+python scripts/build_release.py     # 把**已经构建好的**产物收进 release/v0.1.0/，并算清单
+python scripts/verify_release.py    # 发行验收：产物形态、三方哈希一致
+```
+
+`build_release.py` **自己不构建任何东西** —— 构建是各平台自己的事
+（Web 的 `npm run build`、Windows 的 `build_windows.py`、Android 的 `gradlew assembleRelease`）。
+它只做三件事：
+
+1. 把各平台产物按固定布局收进 `release/<版本>/`，Web 那份打成 zip；
+2. 逐文件算 sha256，写 `SHA256SUMS.txt`（`sha256sum -c` 能直接校验的格式）；
+3. 写 `RELEASE-MANIFEST.json` —— 产物清单的机器可读形态，含每一项的字节数、sha256、
+   **签名状态**（`signed`）和 `not_built`（本轮没产物的平台及原因）。
+
+两点值得说明：
+
+- **zip 是确定性的。** 条目按名字排序、时间戳钉死在 1980-01-01、压缩级别固定 ——
+  同一份 `frontend/dist` 打两次得到**逐字节相同**的 zip。这和 `verify_branding.py` 里
+  「现场渲一次、断言逐像素相同」是同一种态度：产物要可复现，否则 sha256 这个数字没有意义。
+  `verify_release.py` 会**现场重打一次**再对 sha256。
+- **签名状态写进清单，不留给读者猜。** Android 那份由 `assembleRelease` 产出，
+  但 `app/build.gradle` 的 `release` 块用的是 `signingConfigs.debug`
+  —— 它是 **debug keystore 签的**，能装、能用，**不能上架**。清单里如实写 `debug`。
+
+`release/<版本>/` 里的**大二进制**（`.exe` / `.apk` / `.zip`）被 `.gitignore` 排除，
+不进版本库；跟着产物走的 `RELEASE-NOTES.md`、`RELEASE-MANIFEST.json`、`SHA256SUMS.txt`
+是文本，正常入库。
+
+> **Web 产物是按站点根部署的**（`base: '/'`，引用形如 `/assets/…`）：
+> 解压后要挂在服务器根路径，放子目录会 404。桌面版走的是另一条 mode（`base: './'`），
+> 产物落在 `frontend/dist-desktop/`，和 Web 的 `frontend/dist/` 互不影响。
+> `verify_release.py` 会把这件事作为 NOTE 打出来，不假装它是缺陷。
+
+---
+
 ## 品牌资产
 
 四平台共用**一份**设计真源，全部产物由脚本生成，**没有任何一个平台是手画的**。
@@ -1202,7 +1287,7 @@ iOS configuration
 | 状态 | 含义 | 本项目的对应事实 |
 | --- | --- | --- |
 | **Implemented** | 代码写完了 | 四个平台客户端 + 全部工具（19 种格式 / 70 条转换 / 7 个 PDF 操作） |
-| **Built** | 真的产出过二进制或产物 | Web `frontend/dist/` · Windows `FileTools.exe` + `FileTools-Setup-x64.exe` · Android `npx expo export --platform android` |
+| **Built** | 真的产出过二进制或产物 | Web `frontend/dist/` · Windows `FileTools.exe` + `FileTools-Setup-x64.exe` · Android **真 APK**（`gradlew assembleRelease`，98,875,636 字节，含 4 个 ABI） |
 | **Verified** | 在真实环境跑过，且留下了读数 | Web 真实浏览器（2,074 项断言）· Windows 安装→启动→卸载全流程 · Android 原生路径（AVD，真 UI 驱动，转换/下载/分享都走通）· 后端 1,645 条 pytest |
 | **Not verified** | 没有可靠证据 | **iOS 的任何运行时行为**（不是「大概没问题」，是没测过） |
 | **Environment limited** | 不是没做，是本机够不着 | iOS 构建（无 macOS）· Android 独立真机验收（无物理设备）· Windows ARM64（无对应 target）· `docker build`（本机无 docker） |
@@ -1238,6 +1323,43 @@ iOS configuration
 那 4 项 `NOT EXECUTED` 到本轮为止**依然关着**，而且不是「没做」：本机没有 docker、
 不是 macOS、`adb devices` 是空的（没有物理设备）、`rustup` 只装了 `x86_64-pc-windows-msvc`。
 **它们不算通过**，所以上表最后不写「四个平台全部验证完毕」。
+
+#### v0.1.0 发行一轮的读数（2026-10-08 傍晚）
+
+上表是那一轮的历史记录，原文保留。下面是**发行打包这一轮重取**的一组，同样是当场实测：
+
+| 项 | 实测读数 | 取证时间 |
+| --- | --- | --- |
+| 后端 pytest | **1645 passed / 0 failed / 0 skipped**（178 秒） | 10-08 17:39–17:42 |
+| 冻结回归（22 步严格串行，`/tmp/ft-regress-final.sh`，sha256 `e1f1a744…`，**跑前冻结、跑时未改**） | **PASS=22 FAIL=0** | 10-08 17:39–18:13 |
+| `scripts/verify_final.py` | **98 / 98，FAILED 0，4 项 NOT EXECUTED** | 10-08 18:13 |
+| `scripts/verify_branding.py` | **103 / 103** | 10-08 17:43 |
+| `scripts/verify_desktop.py`（含真跑一次 Tauri 构建） | **48 / 48** | 10-08 17:43–17:45 |
+| **`scripts/verify_release.py`**（本轮新增） | **48 / 48，FAILED 0，4 项 NOT EXECUTED** | 10-08 18:14 |
+| Android APK 真构建 | **`BUILD SUCCESSFUL in 11m 52s`**，612 个 task | 10-08 17:00 |
+
+两处和上一轮不同，都说清楚：
+
+- **`verify_final.py` 从 96 变成 98**，不是判据变松，是**多了 2 条**：
+  「脚本齐备」清单里加进了本轮新增的 `build_release.py` 与 `verify_release.py`
+  （那个清单的用途就是不让验收脚本被悄悄删掉）。旧断言一条没删。
+- **Android 的「Built」从 JS 导出升级成真 APK。** 上一行写的是
+  `npx expo export --platform android`（只导出 JS bundle，不是安装包）；
+  这一轮走 `gradlew assembleRelease` 出了真正的 `.apk`。
+  **但这不等于「Android 真机验证完成」** —— 装到物理设备上跑一遍仍然没做过，
+  矩阵里那几行 `VERIFY` 一个都没升。
+
+> **一处假红，如实记下来。** 这一轮第一次跑回归时 `verify_branding.py` 报了红：
+> §九「没有游离的图标」数出了 5 个文件 —— 全是 `expo prebuild` 生成的
+> `mobile/android/.../splashscreen_logo.png`。根因是那条检查走文件系统、
+> 靠一份**手维护的 `SKIP_DIRS`** 判断「什么不在仓库里」，而 `mobile/android/`
+> 被 `mobile/.gitignore:41` 整个排除、`git ls-files` 一个都不跟踪 —— 它根本不在仓库里。
+> 修法是**直接问 git**（`git check-ignore --stdin -z`），不再自己维护第二份忽略清单。
+> **修完做了反向验证**：在 `backend/` 放一个入仓库的 `evil-logo-stray.svg`，
+> 该检查照样抓到 —— 是变准了，不是变松了。
+> 顺带抓出一个 Windows 上的坑：`subprocess` 的 `text=True` 会把写进 stdin 的 `\n`
+> 翻译成 `\r\n`，git 于是收到带 CR 的路径并加引号回显，比对全不中；
+> 症状很特别 —— **n 个路径里前 n-1 个脏、最后一个干净**。
 
 ---
 
@@ -1401,6 +1523,13 @@ FileTools/
 │
 ├── branding/                       # ★ 四平台品牌真源与全部产物，见下方独立树
 │
+├── release/                        # ★ 发行暂存树，由 scripts/build_release.py 写入
+│   └── v0.1.0/
+│       ├── RELEASE-NOTES.md        # 给下载者看的说明（文本，入库）
+│       ├── RELEASE-MANIFEST.json   # 产物清单的机器可读形态：字节数 / sha256 / 签名状态 / not_built
+│       ├── SHA256SUMS.txt          # sha256sum -c 格式
+│       ├── web/ windows/ android/  # 各平台产物；**大二进制被 .gitignore 排除，不进版本库**
+│
 └── scripts/
     ├── verify_phase2.py … verify_phase10a.py   # 各阶段的真实浏览器 / 真机验收脚本
     ├── verify_phase9a_live.py                  # 后端真机验收（并发、指标、看门狗）
@@ -1412,6 +1541,8 @@ FileTools/
     ├── build_windows.py                        # ★ 真构建：产出 FileTools.exe 与安装器（附 sha256）
     ├── verify_desktop.py                       # ★ 桌面验收：六项检查，能构建就真的构建一次
     ├── verify_final.py                         # ★ 最终总验收入口：横切四个平台，环境够不着的写 NOT EXECUTED
+    ├── build_release.py                        # ★ 收拢发行产物到 release/<版本>/，写清单与 sha256（zip 是确定性的）
+    ├── verify_release.py                       # ★ 发行验收：产物形态、三方哈希一致，环境够不着的写 NOT EXECUTED
     ├── verify_markup_live.py / verify_text_live.py  # 标记语言 / 文本转换的真机验收
     ├── probe_ocr.py                            # 探测本机 OCR 组件是否可用
     ├── acceptance_final.py                     # 跨阶段总验收
@@ -2559,7 +2690,8 @@ CI 里**刻意不跑** `scripts/verify_phase*.py` —— 那一批要真实 Chro
 | **`scripts/verify_mobile_phase11a.py`** | **107 / 107** | **第十一阶段 A 封板入口**，5 个分段（A 反漂移 25 / B 与真服务器对账 8 / C 三条真实链路 19 / D 界面行为 36 / E 任务生命周期：取消与重试 19） |
 | **`scripts/verify_branding.py`** | **103 / 103** | 品牌验收：唯一真源、四平台图标尺寸与像素、App 名、版本一致性、`Dockerfile` 的 `COPY VERSION` |
 | **`scripts/verify_desktop.py`** | **48 / 48** | 桌面验收：Tauri 配置、标识符、版本、Windows 图标，**并真的跑了一次 Tauri 构建** |
-| **`scripts/verify_final.py`** | **96 / 96**（另 4 项 `NOT EXECUTED`） | **最终总验收入口**：版本 / 品牌 / 单一真源 / Web / 后端 / 移动 / 桌面 / 脚本齐备的横切检查。环境够不着的项（docker build、iOS 构建、Android 真机、ARM64）输出 `NOT EXECUTED` 并写明原因，**不写成 PASS** |
+| **`scripts/verify_final.py`** | **98 / 98**（另 4 项 `NOT EXECUTED`） | **最终总验收入口**：版本 / 品牌 / 单一真源 / Web / 后端 / 移动 / 桌面 / 脚本齐备的横切检查。环境够不着的项（docker build、iOS 构建、Android 真机、ARM64）输出 `NOT EXECUTED` 并写明原因，**不写成 PASS** |
+| **`scripts/verify_release.py`** | **48 / 48**（另 4 项 `NOT EXECUTED`） | **发行验收**：`release/v0.1.0/` 每一份产物的形态（exe 真的是 PE/NSIS，APK 真的带签名块与 4 个 ABI）、**文件 · `SHA256SUMS.txt` · `RELEASE-MANIFEST.json` 三方哈希一致**、Web 的 zip 现场重打一次必须逐字节相同 |
 | 桌面端安装包 **真机装一遍** | **通过** | 走完向导逐页核对 → 装 → 开 → 卸载，安装目录 / 两个快捷方式 / 注册表项全部清除 |
 
 跑法（以第十阶段为例）：
