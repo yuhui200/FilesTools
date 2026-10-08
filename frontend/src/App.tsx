@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, HashRouter, Route, Routes } from 'react-router-dom'
 
 import { Layout } from '@/components/Layout'
 import { Convert } from '@/pages/Convert'
@@ -37,11 +37,27 @@ function useGlobalDropGuard() {
   }, [])
 }
 
+/**
+ * 桌面端用 HashRouter，Web 用 BrowserRouter。
+ *
+ * 桌面端的页面由 Tauri 的自定义协议提供，**没有 HTTP 服务器做 SPA 回退**：
+ * BrowserRouter 下一个 `filetools://…/pdf/merge` 的深链刷新会直接 404，
+ * 因为那个路径下并没有真的文件。HashRouter 把路由放在 `#` 后面，
+ * 服务器（这里就是文件协议）永远只看到 index.html。
+ *
+ * 判据取**构建期常量** `import.meta.env.MODE`，不是去嗅探
+ * `window.__TAURI_INTERNALS__` —— 前者在编译时就被替换成确定的字面量，
+ * 后者要赌那个全局在页面脚本执行时已经挂上。
+ *
+ * Web 的 URL 形状完全不变，所有 verify_phase*.py 的路径断言不受影响。
+ */
+const Router = import.meta.env.MODE === 'desktop' ? HashRouter : BrowserRouter
+
 export function App() {
   useGlobalDropGuard()
 
   return (
-    <BrowserRouter>
+    <Router>
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<Home />} />
@@ -68,6 +84,6 @@ export function App() {
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>
-    </BrowserRouter>
+    </Router>
   )
 }

@@ -113,6 +113,16 @@ export interface ConversionGroups {
   errorCode: string | null
   /** 已经下载过的单项（一次性令牌，取过就没了） */
   takenItems: ReadonlySet<string>
+  /**
+   * 桌面端落盘后的绝对路径，键是任务号。
+   *
+   * 这里是一张表而不是一个值：一次可能连着下好几个单项，每一项落在哪
+   * 都得留一份。Web 上**恒为空对象**（下载交给浏览器，见
+   * ``components/DesktopSavedFile.tsx``）。
+   */
+  savedItemPaths: Readonly<Record<string, string>>
+  /** 桌面端落盘后的绝对路径，键是组的 id；Web 上恒为空对象 */
+  savedGroupPaths: Readonly<Record<string, string>>
 
   addFiles: (incoming: File[]) => void
   removeFile: (groupId: string, index: number) => void
@@ -208,6 +218,10 @@ export function useConversionGroups(options: Options): ConversionGroups {
   const [downloading, setDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState<string | null>(null)
   const [takenItems, setTakenItems] = useState<ReadonlySet<string>>(new Set())
+  // 桌面端落盘后的绝对路径。按「单项 / 整组」分开记，键分别是任务号与组 id；
+  // Web 上两张表恒为空（见 components/DesktopSavedFile.tsx）
+  const [savedItemPaths, setSavedItemPaths] = useState<Record<string, string>>({})
+  const [savedGroupPaths, setSavedGroupPaths] = useState<Record<string, string>>({})
 
   /** 每一组一个 AbortController：一组取消不影响其它组 */
   const controllers = useRef(new Map<string, AbortController>())
@@ -521,6 +535,8 @@ export function useConversionGroups(options: Options): ConversionGroups {
       if (!group) return
 
       patch(groupId, { retrying: taskId, error: null, errorCode: null })
+      // 重试会产出一份**新的**结果，上一轮那次落盘的路径已经指不到东西了
+      setSavedItemPaths((current) => dropKeys(current, [taskId]))
       void retryConversionTask(taskId)
         .then((snapshot) => {
           patch(groupId, { batch: snapshot, retrying: null })
@@ -549,7 +565,12 @@ export function useConversionGroups(options: Options): ConversionGroups {
       const markTaken = () => setTakenItems((current) => new Set(current).add(taskId))
 
       void downloadResult(url, filename)
-        .then(markTaken)
+        .then((outcome) => {
+          markTaken()
+          if (outcome.kind === 'desktop') {
+            setSavedItemPaths((current) => ({ ...current, [taskId]: outcome.path }))
+          }
+        })
         .catch((caught: unknown) => {
           if (caught instanceof ApiError && caught.status === 404) markTaken()
           setDownloadError(messageOf(caught, '下载失败，请重试'))
@@ -573,7 +594,10 @@ export function useConversionGroups(options: Options): ConversionGroups {
       setDownloading(true)
       setDownloadError(null)
       void downloadResult(result.download_url, filename)
-        .then(async () => {
+        .then(async (outcome) => {
+          if (outcome.kind === 'desktop') {
+            setSavedGroupPaths((current) => ({ ...current, [groupId]: outcome.path }))
+          }
           // 结果是一次性的：下载完再查一次，页面就能如实显示「已取走」
           try {
             patch(groupId, { batch: await getConversionBatch(statusUrl) })
@@ -587,12 +611,22 @@ export function useConversionGroups(options: Options): ConversionGroups {
     [groups, patch],
   )
 
-  const removeGroup = useCallback((groupId: string) => {
-    controllers.current.get(groupId)?.abort()
-    controllers.current.delete(groupId)
-    running.current.delete(groupId)
-    setGroups((current) => current.filter((group) => group.id !== groupId))
-  }, [])
+  const removeGroup = useCallback(
+    (groupId: string) => {
+      controllers.current.get(groupId)?.abort()
+      controllers.current.delete(groupId)
+      running.current.delete(groupId)
+      // 这一组连同它那一串任务号都从界面上没了，落盘路径表里对应的条目
+      // 也就永远没人再读了 —— 顺手清掉，别让表随着操作次数一直涨
+      const removed = groups.find((group) => group.id === groupId)
+      setGroups((current) => current.filter((group) => group.id !== groupId))
+      setSavedGroupPaths((current) => dropKeys(current, [groupId]))
+      setSavedItemPaths((current) =>
+        dropKeys(current, (removed?.batch?.tasks ?? []).map((task) => task.task_id)),
+      )
+    },
+    [groups],
+  )
 
   const dismissError = useCallback(() => {
     setError(null)
@@ -650,6 +684,8 @@ export function useConversionGroups(options: Options): ConversionGroups {
     setErrorCode(null)
     setDownloadError(null)
     setTakenItems(new Set())
+    setSavedItemPaths({})
+    setSavedGroupPaths({})
   }, [])
 
   const fileCount = groups.reduce((sum, group) => sum + group.files.length, 0)
@@ -665,6 +701,8 @@ export function useConversionGroups(options: Options): ConversionGroups {
     error,
     errorCode,
     takenItems,
+    savedItemPaths,
+    savedGroupPaths,
     addFiles,
     removeFile,
     setTarget,
@@ -689,6 +727,23 @@ export function useConversionGroups(options: Options): ConversionGroups {
 }
 
 // ----------------------------------------------------------------------
+
+/**
+ * 从一张「键 → 值」表里删掉若干键。
+ *
+ * 一个键都没删掉时**原样返回入参**：这些表是 state，返回新对象会白白触发
+ * 一次重渲，而这个函数在「移除一组」里是每点一次都要走的路径。
+ */
+function dropKeys(map: Record<string, string>, keys: Iterable<string>): Record<string, string> {
+  let next: Record<string, string> | null = null
+  for (const key of keys) {
+    if (key in map) {
+      next ??= { ...map }
+      delete next[key]
+    }
+  }
+  return next ?? map
+}
 
 function errorCodeOf(caught: unknown): string {
   return caught instanceof ApiError ? caught.code : 'PROCESSING_FAILED'

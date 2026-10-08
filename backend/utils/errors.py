@@ -31,7 +31,7 @@ class ErrorCode:
     INVALID_REQUEST = "INVALID_REQUEST"        # 400 参数或用法不合法
     FILE_TOO_LARGE = "FILE_TOO_LARGE"          # 413 文件超过大小上限
     INVALID_FILE_TYPE = "INVALID_FILE_TYPE"    # 415 文件类型不在允许范围内
-    CORRUPTED_FILE = "CORRUPTED_FILE"          # 422 文件能收下，但内容损坏 / 无法解析
+    CORRUPTED_FILE = "CORRUPTED_FILE"          # 400 文件能收下，但内容损坏 / 无法解析
     PROCESSING_FAILED = "PROCESSING_FAILED"    # 422 处理过程本身失败
     PROCESSING_TIMEOUT = "PROCESSING_TIMEOUT"  # 504 处理超时
     SERVER_ERROR = "SERVER_ERROR"              # 500 非预期错误

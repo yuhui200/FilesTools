@@ -187,6 +187,7 @@ export function ImageConvert() {
             onReset={task.reset}
             downloading={task.downloading}
             downloadError={task.downloadError}
+            savedPath={task.savedPath}
           />
         )}
 

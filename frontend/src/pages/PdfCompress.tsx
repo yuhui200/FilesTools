@@ -156,6 +156,7 @@ export function PdfCompress() {
           onRestart={task.reset}
           downloading={task.downloading}
           downloadError={task.downloadError}
+          savedPath={task.savedPath}
         />
       )}
 

@@ -4,9 +4,46 @@
 
 > 上传文件 → 选择操作 → 自动处理 → 下载结果
 
-当前进度：**第十阶段已封板（PHASE 10 COMPLETE）**。项目已实现 **19 种格式、70 条转换、7 个 PDF 操作**，
+当前进度：**第十一阶段最终收尾已完成（FINAL HARDENING PASSED）**。
+这一轮**没有新增任何功能**，做的全是「让已经建好的四平台产品真的能交付」：
+
+- 修掉 CI 上那条一直红的**损坏文档归类**：同一个损坏的 `.docx`，`soffice` 在 Windows 上
+  退出码是 1、在 Linux 上是 0，而旧代码只押退出码 —— 于是 Linux 上把「文件已损坏」错报成
+  「转换失败」。判据换成了与平台无关的一条（源文件主部件是否良构），并补了**反向护栏测试**，
+  防止矫枉过正地把所有失败都算成 400。
+- 把**版本**与**品牌**钉成唯一真源（仓库根 `VERSION` + `branding/source/`），
+  四个平台的消费方全部由脚本写入、由验收脚本逐项断言相等。
+- 安全防线（图片炸弹 / SVG / HTML 注入与 SSRF / 文件名）**每一条都有自动化测试**，
+  不是只写在代码里。
+- 新增 `scripts/verify_final.py` 作为**最终总验收入口**：环境够不着的项输出 `NOT EXECUTED`
+  并写明原因，**绝不写成 PASS**。
+
+**四平台产品：Web / Android / iOS / Windows。** 完整的逐项矩阵见[四平台总览](#四平台总览)，
+环境受限的两项（Android 真机、iOS）在那里如实标出。
+
+本轮最终收尾的结论是 **`FINAL HARDENING PASSED`**，但它**不**等于「四个平台全部验证完毕」——
+紧跟着还有一句 **`Environment-limited verification`**。逐项的结论、证据与**没做到的部分**
+写在下面的[当前支持平台](#当前支持平台)与[当前真实状态](#当前真实状态)两节里。
+
+---
+
+上一轮：**第十一阶段 A 的补充需求已完成（PHASE 11A-DESKTOP COMPLETE）** ——
+新增 **Windows 桌面版**并统一了**四平台品牌**。
+
+- **Windows 桌面版**：基于 **Tauri 2**，直接复用 Web 前端产物（不改一行 UI），真机产出并实测
+  `FileTools-Setup-x64.exe`。**桌面端不含任何转换引擎** —— 它只是第四个客户端，
+  和网页、手机一样调用同一个后端。
+- **统一品牌**：全平台只有**一份** Logo 真源（`branding/source/`），四个平台的图标与 favicon
+  全部由它生成；**一份**版本真源（仓库根的 `VERSION`）。
+
+此前**第十一阶段 A 已完成（PHASE 11A COMPLETE）** —— 新增 **React Native（Expo）移动 App**
+（四个底部标签页、能力驱动的动态工具列表、纯本地历史）。
+后端**一行没改**：移动端只是**又一个客户端**，转换仍由同一套 API 在同一套队列 / Worker 上完成，
+没有第二份「文件处理真相」。
+
+更早的**第十阶段已封板（PHASE 10 COMPLETE）**：**19 种格式、70 条转换、7 个 PDF 操作**，
 覆盖图片、PDF、Office 文档三条主线，以及把它们统一起来的「统一转换中心」与底层的任务队列 / Worker 并发架构。
-前九个阶段的接口与界面全部保持兼容。
+前十阶段的接口与界面全部保持兼容。
 
 ---
 
@@ -19,6 +56,10 @@
 - [已实现的功能](#已实现的功能)
 - [统一转换中心](#统一转换中心)
 - [批量处理与任务队列](#批量处理与任务队列)
+- [移动 App（Expo / React Native）](#移动-appexpo--react-native)
+- [Windows 桌面版（Tauri）](#windows-桌面版tauri)
+- [品牌资产](#品牌资产)
+- [四平台总览](#四平台总览)
 - [技术栈](#技术栈)
 - [项目结构](#项目结构)
 - [压缩是怎么工作的](#压缩是怎么工作的)
@@ -42,15 +83,29 @@
 | 组件 | 版本 | 本项目验证环境 | 必需？ |
 | --- | --- | --- | --- |
 | Python | 3.10 及以上 | 3.14.5 | 必需 |
-| Node.js | 18 及以上 | 24.15.0 | 仅构建前端时需要 |
-| npm | 9 及以上 | 11.12.1 | 仅构建前端时需要 |
+| Node.js | 18 及以上 | 24.15.0 | 仅构建前端 / 跑移动 App 时需要 |
+| npm | 9 及以上 | 11.12.1 | 仅构建前端 / 跑移动 App 时需要 |
 | LibreOffice | 7.0 及以上 | 26.2.5 | **可选**，只有 Word / Excel / PPT 转 PDF 需要 |
 | pillow-heif | 1.8.0 | 已装 | **可选**，只有 HEIC 需要 |
 | rapidocr-onnxruntime | 1.2.3 | 已装 | **可选**，只有 PDF→Word 的扫描件 OCR 需要 |
 | Playwright | — | 已装 | 仅验收脚本需要 |
 
+**只有构建 Windows 桌面版才需要的组件**（跑 Web / 后端 / 移动端都不需要）：
+
+| 组件 | 版本 | 本项目验证环境 | 说明 |
+| --- | --- | --- | --- |
+| Rust | 1.77 及以上 | 1.98.1 | Tauri 的编译器；host 必须是 `x86_64-pc-windows-msvc` |
+| Visual Studio Build Tools | 2022 及以上 | 2026，`cl.exe` / `link.exe` 14.51.36231 | 提供 MSVC 链接器（`cl.exe` 不必在 PATH 里，rustc 自己找） |
+| Windows SDK | 10 及以上 | 10.0.26100.0 | 提供 `rc.exe`（编译资源） |
+| WebView2 Runtime | — | 154.0.4258.53 | 桌面版的运行时；Win11 与较新的 Win10 自带，安装包内也带了引导程序 |
+| NSIS | — | 3.11 | **由 Tauri 首次打包时自动下载**，不需要手动装 |
+| `@tauri-apps/cli` | ^2 | 2.12.1 | `desktop/` 的 devDependency，`npm install` 时随 npm 预编译二进制装上 |
+
 > OCR 引擎用的是 **rapidocr-onnxruntime**（纯 pip 安装、自带中英文模型），不是 Tesseract ——
 > 换引擎只需要改 `services/ocr_service.py` 里的 `_load_engine`。
+>
+> 桌面版**没有引入任何新的 Python 或前端运行时依赖**：前端仍然零新增 npm 包
+> （Tauri 的 API 由 `withGlobalTauri` 暴露成全局对象），新增的只有 Tauri 这条构建链。
 
 ### LibreOffice 安装要求
 
@@ -718,7 +773,7 @@ GET  /api/download/{job_id} → 200 结果文件（一次性，下载后立即�
 | --- | --- | --- |
 | `FILE_TOO_LARGE` | 413 | 文件过大，请上传更小的文件 |
 | `INVALID_FILE_TYPE` | 415 | 暂不支持该文件格式 / 扩展名与真实内容不一致 |
-| `CORRUPTED_FILE` | 422 | 文件已损坏或不完整 |
+| `CORRUPTED_FILE` | 400 | 文件已损坏或不完整 |
 | `PROCESSING_TIMEOUT` | 504 | 处理超时，请换更小的文件重试 |
 | `PROCESSING_FAILED` | 422 | 处理失败，请稍后重试 |
 | `SERVER_ERROR` | 500 | 服务器处理失败，请稍后重试 |
@@ -729,9 +784,445 @@ GET  /api/download/{job_id} → 200 结果文件（一次性，下载后立即�
 
 ---
 
+## 移动 App（Expo / React Native）
+
+`mobile/` 是一个 **React Native（Expo SDK 57 + TypeScript）** 的移动 App，与 Web 前端**并列**，
+两者都只是同一套后端 API 的客户端。
+
+**它不是移植，也没有第二份转换逻辑。** 后端**一行代码都没改**：移动端调用的就是 Web 端在调的那些
+端点（`/api/conversion/capabilities`、`/api/conversion/tasks`、任务快照与下载接口），
+转换仍然发生在同一套任务队列与 Worker Pool 上。没有 `/api/mobile/*` 这种「移动专用转换接口」——
+那会立刻变成第二条真理。
+
+### 跑起来
+
+```bash
+# 1. 后端（端口随意，移动端的 .env 要指过去）
+cd backend && ./.venv/Scripts/python.exe -m uvicorn main:app --host 0.0.0.0 --port 8011
+
+# 2. 移动端
+cd mobile
+cp .env.example .env      # 按自己机器改 EXPO_PUBLIC_API_BASE_URL
+npm install
+npx expo start            # 然后按 w 开浏览器 / a 开 Android / i 开 iOS
+```
+
+| 平台 | 怎么跑 | 后端地址要填什么 |
+| --- | --- | --- |
+| Web（`npx expo start --web`） | 浏览器 | `http://127.0.0.1:8011` |
+| Android 模拟器 | Expo Go | `http://10.0.2.2:8011`（模拟器里的 `localhost` 是模拟器自己），或 `adb reverse tcp:8011 tcp:8011` 后用 `127.0.0.1` |
+| iOS 模拟器 | 与宿主机同网络 | `http://127.0.0.1:8011` |
+| 真机 | Expo Go / 自带构建 | 宿主机在局域网里的 IP（如 `http://192.168.1.10:8011`），并且后端要 `--host 0.0.0.0` |
+
+> ⚠️ `EXPO_PUBLIC_API_BASE_URL` 是 **打包时**由 `babel-preset-expo` 做**纯文本替换**写进产物的，
+> 不是运行时读的。所以必须**逐字**写成 `process.env.EXPO_PUBLIC_API_BASE_URL` ——
+> 写成 `process.env[name]`、解构或先赋给变量，替换都不会发生，运行时拿到 `undefined`。
+> 改完要重启 dev server，热重载不会生效。
+
+### 四个标签页与路由
+
+路由用 **expo-router**（文件即路由），`app/` 下的目录结构就是 URL 结构：
+
+| 路由 | 页面 | 做什么 |
+| --- | --- | --- |
+| `/` | 首页 | 主入口 + 「最近处理」 |
+| `/tools` | 工具 | 全部工具的搜索与分类筛选 |
+| `/history` | 历史 | 本机记录，可删除 / 清空 |
+| `/profile` | 我的 | 外观（浅色 / 深色 / 跟随系统）、服务端自检、关于 |
+| `/convert/[capabilityId]` | 转换 | 动态参数表单 + 选文件 + 提交 |
+| `/task/[batchId]` | 任务 | 轮询进度、下载 / 分享结果、取消 |
+
+### 能力驱动：移动端**没有**一张硬编码的能力表
+
+工具列表来自 `GET /api/conversion/capabilities`，取其中 `operation_type === "conversion"` 的条目
+（当前 **70 条**）。分类标签来自响应的 `categories`，一个都不写死。
+**在移动端代码里搜不到任何格式名或格式矩阵** —— 这是验收脚本里的一条断言（先剥掉注释再扫，
+免得把文档注释里的举例当成真代码），不是一句口头承诺。
+
+所以后端加一种格式，移动端**不用改代码**就会出现。服务端另外还登记了 **7 条 PDF 操作**
+（合并 / 拆分 / 压缩 / 提取页 / 删除页 / 多图合成 PDF / 图片元数据），本阶段移动端**不提供入口** ——
+它们是「多进多出 / 页面级 / 就地改写」操作，与移动端这一版 1→1 的流程模型不同，与其做一个半吊子的入口，不如如实不做。
+
+### 参数表单也是动态的
+
+转换页的表单按该能力的 `options_schema.items` 渲染（`integer` / `number` / `boolean` / `enum` / `string`，
+带 `min` / `max` / `step` / `unit` / `help` / `visible_when`），提交时**同一份数据**序列化成 `options` JSON。
+渲染与提交同源，没有一处硬编码的键名 —— 将来后端加新选项，移动端不用重新设计表单。
+
+只有 `options_schema` 为 `null` 的能力（70 条里有 13 条）不显示参数区，这是如实反映「这条转换没有可调参数」。
+
+### 错误处理：只看 `code`，永远不显示堆栈
+
+后端统一返回 `{ "error": { "code": …, "message": … } }`，移动端按 `code` 查本地文案表
+（`src/utils/errorMessages.ts`）。**不做字符串匹配，也不把服务端 message 直接甩给用户**，
+更不会出现 traceback、服务器路径或内部模块名。「我的」页里有一项自检，会把服务端
+`/api/config` 给出的**全部 25 个错误码**与本地文案表对一遍，漏配一个就在界面上写出来。
+
+### 上传：一个文件是怎么送出去的
+
+这一段踩过一个坑，写下来免得下次再查一遍。
+
+**Expo SDK 57 起，全局 `fetch` 换成了 `expo/fetch`**（`expo/src/winter/runtime.native.ts` 里装的），
+它**自己**把 `FormData` 序列化成 multipart。它的编码器只认三种 part：字符串、`Blob`、
+以及**带 `bytes()` 的对象**。React Native 那个流传很广的 `{uri, name, type}` 三件套**不在其中** ——
+会当场抛 `Unsupported FormDataPart implementation`。
+
+要命的是这个异常发生在**开 socket 之前**：请求根本没发出去，服务端一条日志都没有，
+客户端却把它归一成「无法连接服务器」。看上去像网络不通，实际是序列化没走通 —— 很容易查错方向。
+
+现在原生这一路给的是 `expo-file-system` 的 `File` 读出来的字节，包成 `{ name, type, bytes() }`
+（见 `src/services/api/conversion.ts`）。**不能直接把 `File` 当 part 用**：编码器取文件名读的是
+`part.name`，而 `File.name` 是**盘上那个文件的名字**。文档选择器落盘用的是随机名
+（`DocumentPicker/<uuid>.<ext>`），直接用会把源文件名报成一串 uuid，结果文件跟着错名。
+
+文件选择器那边还有一条：**`copyToCacheDirectory` 必须关掉**（`src/services/filePicker.ts`）。
+打开时 Android 会把文件复制到 `context.cacheDir`，那是 **Expo Go 宿主 App** 的缓存目录，
+而 Expo Go 给每个体验的是**受限**的文件权限，`expo-file-system` 读它会明确拒绝：
+
+```text
+Missing 'READ' permission for accessing the file.
+```
+
+关掉之后拿到的是文档提供方的 `content://` —— `expo-file-system` 对 content URI **不做路径权限检查**
+（`FileSystemPath.kt::checkPermission` 里 `uri.isContentUri` 直接放行），由 `ContentProviderFile`
+走 ContentResolver 读。代价是不落副本、读的是本次选择的授权，选完几秒内就上传，够用。
+
+### 结果下载与分享
+
+结果的下载地址是**一次性**的：下载过一次（或过了保留期），服务器上就删掉了。
+移动端把这件事分成两个明确的动作：**下载**（Expo FileSystem）与**分享 / 用别的 App 打开**（Expo Sharing）。
+下载过的任务再打开时，页面显示的是「结果已经被下载过或已过期」这句**实话**，
+而不是一个点了会 404 的按钮。「打包下载」对多文件任务同样可用。
+
+### 本地历史：**只有元数据**
+
+历史存在本机（AsyncStorage；在 Web 上落到 `localStorage`），字段只有
+`batchId / capabilityId / filename / sourceType / targetType / status / total / resultFilename / resultExpired / createdAt`。
+**没有文件内容，没有下载地址，也没有数据库。** 验收脚本会量这个存储的实际字节数
+（三次转换的记录整包 **765 字节**）并断言它没有把文件塞进去。
+
+### 主题、状态与轮询
+
+- 浅色 / 深色 / 跟随系统三种，切换量的是**真实渲染后的像素**（页面上占比最大的不透明底色，
+  亮度 250 → 17），不是读一个 state 变量
+- 空列表、加载中、网络错误都有明确的界面，不留白屏
+- 任务轮询是**有界**的：有最大时长（30 分钟）、任务 settle 即停、组件卸载即停 —— 不会留下一个永远在跑的定时器
+
+### 触控与窄屏
+
+所有可点控件的点击区 **≥ 44 px**（`TOUCH_TARGET` 令牌，验收脚本在工具页上逐个量了 75 个控件）。
+375 / 390 / 414 三个宽度下**没有任何横向滚动**。
+
+### 平台差异：一个只在 Web 上现形的真缺陷
+
+Expo 让同一套代码跑在 Web 上，但**原生端合法的东西在 Web 上不一定合法**。
+历史页最初把整张卡片包成一个按钮、删除键嵌在里面 —— 原生端没问题，但在 Web 上那是
+`<button>` 套 `<button>`：**非法 HTML**，React 报错、hydration 会失败，键盘 Tab 与屏幕阅读器
+也拿不到里面那个删除键。改成卡片退化为普通容器、两个按钮并列之后才真正对。
+这条是被验收脚本的「浏览器控制台必须无错误」抓出来的 —— 这类问题光看界面截图看不出来。
+
+### 本阶段**不做**的
+
+账号 / 登录 / 支付 / 会员 / 推送，音频与视频，离线转换（转换永远在服务器上做，本地不做第二份实现），
+以及和服务端的历史同步 —— 历史**只在这台设备上**，「我的」页里如实这么写着。
+
+---
+
+## Windows 桌面版（Tauri）
+
+第十一阶段 A 补充新增的**第四个客户端**。它**不是**一个新的实现，而是**把 Web 前端原样装进一个
+原生窗口**：同一份 React 代码、同一个后端、同一套 API。
+
+### 桌面端**不含**任何转换引擎
+
+这一点是硬性的：`desktop/` 里**没有** PDF、图片、Office、OCR、压缩的任何一行实现，
+Rust 侧只做两件网页做不到的事 —— **把结果文件落到磁盘**、**调用资源管理器**。
+所有转换仍然发往 `http://127.0.0.1:8000`，由同一个后端、同一个队列、同一批 Worker 完成。
+换句话说：桌面版和网页版**没有第二份「文件处理真相」**。
+
+### 为什么复用 Web 前端
+
+前端多了一条构建模式（`npm run build:desktop`），产物落到 `frontend/dist-desktop/`：
+
+- `vite.config.ts` 里 `mode === 'desktop'` 时：`base` 改成 `'./'`（自定义协议下要相对路径）、
+  `define` 把后端地址与版本号**烤进产物**
+- **`frontend/dist/` 一个字节都没动**，后端托管的网页版完全不受影响
+- Web 的 URL 用的是 `BrowserRouter`，桌面端换成 `HashRouter` —— 这是**构建期常量**决定的，
+  不是运行时嗅探 `window.__TAURI__`（构建期确定，不用赌某个全局存不存在）
+- 桌面端**只改了路由器与下载方式这两处**，页面本身一行没重写
+
+### 桌面上的文件能力
+
+| 能力 | 实现 |
+| --- | --- |
+| 选择 / 多选 / 拖拽上传 | **完全复用网页版的上传区**。`tauri.conf.json` 里把 `dragDropEnabled` 关掉了 —— 不关的话 Tauri 的原生拖放会**吃掉** HTML5 的 drop 事件，网页那套 `onDrop` 根本收不到 |
+| 下载结果 | ⚠️ `<a download>` + blob 在 Tauri 的 webview 里是**静默失效**的（点了没反应）。所以桌面端改走 Rust 命令 `save_result`，用 Tauri 的**原始二进制 IPC** 传字节，直接落盘到系统下载目录 |
+| 打开结果 | `explorer.exe <路径>` |
+| 在文件夹中显示 | `explorer.exe /select,<路径>` |
+
+> 中文文件名要**双重处理**才能活下来：`fetch` 的 `Headers` 只接受 ≤ 0xFF 的码点，
+> 塞中文会直接抛 `TypeError`；所以 JS 侧 `encodeURIComponent`、Rust 侧再百分号解码。
+> 另外 `Array.isArray(payload)` 在 Tauri 的 IPC 里**也被当成原始二进制**，
+> 所以那个 payload 永远不能是数组。
+
+### 安装体验（真机逐项核过）
+
+安装包是 **NSIS** 的 `FileTools-Setup-x64.exe`，**按当前用户安装**（`installMode: "currentUser"`）：
+装到 `%LOCALAPPDATA%\FileTools`，**不弹 UAC**。
+
+真机上走完的向导页面（每一页都是从活动的控件树里读出来的，不是照文档抄的）：
+
+| 页面 | 内容 |
+| --- | --- |
+| 欢迎 | `欢迎使用 FileTools 安装程序` |
+| 安装位置 | 默认 `C:\Users\<用户>\AppData\Local\FileTools`，所需空间 7.7 MB |
+| 开始菜单 | 文件夹名 `FileTools`，带「不要创建快捷方式」复选框 |
+| 安装中 | `安装完成` / `安装程序成功完成安装`，带「显示详情」 |
+| 结束 | `完成(F)`、**运行 FileTools(R)**、**创建桌面快捷方式** |
+
+装完之后的实际落点：`filetools.exe`（6,174,720 字节）+ `uninstall.exe`；
+**桌面**快捷方式、**开始菜单**快捷方式都在；
+卸载信息写进 `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\FileTools`，
+所以 **Windows 设置 → 应用** 里能看到 `FileTools 0.1.0`。
+卸载走一遍，上面这些**一样不剩**（安装目录、两个快捷方式、开始菜单文件夹、注册表项全部清除）。
+
+> 「名称 + 版本」在向导里的位置值得说明：**首次安装**的欢迎页只显示名称 `FileTools`，
+> **版本号 0.1.0 出现在两条路径上** —— 已经装过时维护页的
+> `FileTools 0.1.0 已经安装了`，以及「设置 → 应用」里的卸载条目。
+> 这是 NSIS 默认模板的行为，我们没有为了让它出现在欢迎页而去改模板。
+
+### 构建
+
+```bash
+python scripts/build_windows.py     # 真构建，产出 desktop/artifacts/FileTools-Setup-x64.exe
+python scripts/verify_desktop.py    # 六项检查；能构建就真的构建一次
+```
+
+两个脚本都会把 `CARGO_TARGET_DIR` 指到**纯 ASCII** 路径（默认 `D:/filetools-build/target`）：
+仓库自己住在含中文的目录里，而 `makensis` 对非 ASCII 路径历史上有问题。
+
+Tauri 的原生产物名固定是 `FileTools_<版本>_x64-setup.exe`，**没有改名配置项**，
+所以 `build_windows.py` 把它**复制**成 `FileTools-Setup-x64.exe`，并把两边的 **sha256 一起打出来**
+作为证据链 —— 复制过的文件必须能证明它和被复制的那份逐字节相同。
+
+---
+
+## 品牌资产
+
+四平台共用**一份**设计真源，全部产物由脚本生成，**没有任何一个平台是手画的**。
+
+```text
+branding/
+├── source/
+│   ├── filetools-icon.svg          # 唯一真源：App 图标（正方形、无文字）
+│   └── filetools-logo.svg          # 品牌锁排：[Icon] FileTools
+└── generated/                      # 全部由 generate_branding.py 生成
+    ├── manifest.sha256             # 源与所有输出的哈希清单
+    ├── web/      favicon.svg · favicon.ico(16/24/32/48) · favicon-32/48.png
+    │             apple-touch-icon.png(180) · icon-192.png · icon-512.png
+    │             filetools-logo.svg · manifest.webmanifest
+    ├── android/  icon.png(1024) · favicon.png(48) · android-icon-{background,foreground,monochrome}.png
+    │             mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/ic_launcher.png(48/72/96/144/192)
+    ├── ios/      icon-1024.png     # 无 alpha：iOS 图标不许透明
+    └── windows/  icon.ico(16/24/32/48/64/128/256) · icon-256.png
+```
+
+> **改图标 = 改 `source/filetools-icon.svg`，然后重跑生成脚本。**
+> `generated/` 下的每一个字节都是那两个源的派生物，**只有 `scripts/generate_branding.py` 能写**。
+> 直接改 `generated/` 或改各平台的产物目录没用 —— `verify_branding.py` 会把全部产物**重新渲染一遍**
+> 再与盘上比对，手改的当场判红。
+
+### App Icon 与 Brand Logo 是两样东西，不许互用
+
+| | **App Icon** | **Brand Logo** |
+| --- | --- | --- |
+| 文件 | `source/filetools-icon.svg` | `source/filetools-logo.svg` |
+| 形状 | 正方形，铺满画布 | 横排，约 5:1 |
+| 内容 | **只有图形，没有任何文字** | 图标 + 字标 `FileTools` |
+| 尺寸 | 16 px 仍可辨认 | 最小显示高度 24 px |
+| 用途 | App 图标、favicon、PWA 图标、安装器图标 | 页头、关于页、启动页 |
+| 不许 | **当 Logo 用** | **当 App 图标用** |
+
+**为什么这条是硬规则**：App 图标会被系统缩到 16 px，还会被裁成圆形 / 方形 / 水滴形，
+里面放文字必然糊成一团；反过来，页头放一个没有字标的方块，用户认不出这是什么产品。
+`verify_branding.py` 会断言 Icon 源**不含 `<text>`**、Logo 源**含 `FileTools`**。
+
+### 唯一真源是「沿用」，不是「重新设计」
+
+`branding/source/filetools-icon.svg` 就是原来的 `frontend/public/favicon.svg`
+（399 字节、`viewBox="0 0 32 32"`、`#4f46e5` 圆角方块 + 白纸 + 折角）——
+**逐字节复制，一个字节都没改**。这一阶段只做了「把它变成四个平台都能用的一份源」，
+没有另起炉灶画一个新 Logo。
+
+`verify_branding.py` 会**全仓库扫 `*.svg`**：除了 `branding/source/` 的两个源，
+只允许与它们**逐字节相同**的副本存在，出现第三份内容不同的 SVG 就判失败。
+
+### 主色 `#4f46e5` 只此一个值
+
+图标主色**同时**出现在下面五处，改主色要**五处一起改**，`verify_branding.py` 会逐处断言相等：
+
+- `branding/source/filetools-icon.svg` 的底色
+- `frontend/index.html` 的 `<meta name="theme-color">`
+- `frontend/tailwind.config.js` 的 `brand-600`
+- `mobile/app.json` 的 `android.adaptiveIcon.backgroundColor`
+- `branding/generated/web/manifest.webmanifest` 的 `theme_color`
+
+> 历史教训：移动端的 `assets/` 曾经是 **Expo 模板的默认资产**（浅蓝 `#E6F4FE`），
+> 与 Web 的 indigo 根本不是一个色系 —— 「每个平台各自设计一套」正是这一节要防的事。
+
+### 各平台产物的几条硬要求
+
+| 平台 | 要求 | 为什么 |
+| --- | --- | --- |
+| Android 自适应图标 | 前景层里的图形**只占画布 66.4%**（340 / 512 px，居中） | 自适应图标是 108 dp 画布、只有内圈 72 dp 保证可见，边缘会被系统裁掉。这是刻意的留白，**不是渲染出错** |
+| iOS | `icon-1024.png` **不许有 alpha 通道**（`RGB` 模式） | iOS 会拒绝带透明通道的图标，或者自己拿黑色把透明处填掉 |
+| Windows | `icon.ico` 内含 **16/24/32/48/64/128/256** 七档，且 **16–128 用 BMP(DIB)、256 用 PNG** | 混合编码不是随手挑的：Windows 自己产出的 `.ico`、以及 Tauri 用来生成图标的 `ico` crate 都遵循这个分界。NSIS 要拿它当 `installerIcon`，跟惯例一致风险最低 |
+| Android / iOS | `ios/icon-1024.png` 与 `android/icon.png` **内容相同** | Expo 用同一份资产供两个平台。两份都留，是为了让各平台目录自成一体 |
+
+生成脚本对每个目标用**五种渲染方式**之一：
+
+| 方式 | 做什么 | 用在 |
+| --- | --- | --- |
+| `plain` | 原样渲染，圆角外透明 | favicon、PWA 图标、ICO 母图 |
+| `flat` | 合成到不透明 `#4f46e5` 上，圆角外也填满 | iOS 图标、Android `icon.png`、mipmaps |
+| `padded` | 图形缩到画布 66.4% 居中，贴透明底 | Android 自适应图标前景层 |
+| `mono` | 去掉底色、所有形状统一刷白 | Android 主题图标 |
+| `solid` | 纯 `#4f46e5` 满幅 | Android 自适应图标背景层 |
+
+> Pillow 自带的 ICO 编码器两条路都走不通：默认**全部**写 PNG，`bitmap_format="bmp"`
+> 又**全部**写 BMP。所以 `generate_branding.py` 自己拼的容器 —— 但每一帧都验证过与
+> Pillow 独立降采样的结果**逐像素相同**。
+
+### 生成流水线：零新增依赖
+
+本机**没有任何 SVG 光栅化工具**（无 ImageMagick / Inkscape / rsvg / cairosvg），
+所以流水线用两个**本来就有**的东西拼出来，没有新增任何依赖：
+
+1. **Playwright + Chromium**（系统 Python，验收脚本本来就要用）光栅化 SVG ——
+   用 `<img>` 而不是直接打开 SVG（SVG 作顶层文档时默认尺寸不确定），
+   `omit_background=True` 拿透明背景
+2. **Pillow**（`backend/.venv`）把位图编码成多尺寸 ICO / 重新采样 / 转无 alpha 的 RGB
+
+```bash
+python scripts/generate_branding.py           # 生成并安装到消费方
+python scripts/generate_branding.py --check   # 只校验，不写
+```
+
+### 版本也收成了一份真源
+
+仓库根的 **`VERSION`**（一行 `0.1.0`）是全平台唯一的版本来源：
+
+| 消费方 | 怎么拿到 |
+| --- | --- |
+| `backend/config.py` | **运行期读** `../VERSION`；读不到**直接报错**，不给兜底常量 |
+| `frontend/vite.config.ts` | 读 `../VERSION`，`define` 注入 |
+| `desktop/src-tauri/tauri.conf.json` | `"version": "../../frontend/package.json"`（Tauri 原生支持） |
+| `frontend/package.json` · `mobile/package.json` · `mobile/app.json` · `mobile/src/types/index.ts` · 两份 lock | 由 `scripts/sync_version.py` 写入（幂等） |
+
+> **故意不给兜底**：如果 `VERSION` 读不到就退回到一个写死的常量，容器里就会**静默**报出一个
+> 陈旧版本号 —— 那正是这个项目最忌讳的「第二份真相」。宁可启动就报错。
+>
+> ⚠️ 因此 **`Dockerfile` 必须 `COPY VERSION /app/VERSION`**（只 `COPY backend/` 的话镜像里读不到），
+> `verify_branding.py` 会断言这一行存在。
+
+---
+
+## 四平台总览
+
+**一个后端、一套转换注册表、一个图片引擎、一条任务队列、一份品牌 Logo、多个平台客户端。**
+下面的每一格都来自**真实检查**，不是设计意图。
+
+| | **Web** | **Android** | **iOS** | **Windows** |
+| --- | --- | --- | --- | --- |
+| **UI** | React 18 + TS + Vite（既有实现，未重写） | React Native + Expo SDK 57 | 同一套 RN 代码 | **复用 Web 的前端产物**（Tauri 2 + WebView2），零重写 |
+| **Logo** | `[Icon] FileTools` | 同一份源 | 同一份源 | 同一份源 |
+| **Icon** | favicon.svg · favicon.ico(16/24/32/48) · 32 · 48 · 180 · 192 · 512 | icon.png(1024) · 5 档 mipmap(48/72/96/144/192) · adaptive icon | icon-1024.png（**无 alpha**） | icon.ico(16/24/32/48/64/128/256) · icon-256.png |
+| **图标来源** | ← 全部来自 `branding/source/filetools-icon.svg` | ← 同一份 | ← 同一份 | ← 同一份 |
+| **构建** | ✅ `npm run build` → `frontend/dist/`，由后端托管 | ✅ 配置与资产就位（未在 CI 里跑构建） | ❌ **未执行**（本机无 macOS） | ✅ **真的构建过**，产出 `FileTools.exe` + `FileTools-Setup-x64.exe` |
+| **实机** | ✅ 真实 Chromium / Edge / WebKit，2,074 项断言 | ⚠️ 封板验收 107/107 跑在 **Expo Web**（真实浏览器，375/390/414）；Android 原生路径有实测记录，但**没有一份独立的真机验收报告** | ❌ **一行实测都没有** | ✅ 安装 → 启动 → 卸载全流程真机核过 |
+
+**四张图标全部由同一个 SVG 生成**，`verify_branding.py` 会逐个量尺寸、查像素
+（Android 背景色要求**所有像素都等于 `#4f46e5`**、foreground 四角 alpha 为 0、
+iOS 要求 `mode` 里**没有 alpha 通道**），并断言四个平台的 App 名都是 `FileTools`、
+版本都等于根目录 `VERSION`。
+
+> **「实机」这一列刻意不写满。** iOS 没有 macOS 就一行都跑不了；Android 的 107/107
+> 是在浏览器里的 Expo Web 上跑的，不是真设备 —— 把它写成「Android 已验证」是不诚实的。
+> Windows 的 ✅ 则包含真构建、真安装、真启动、真卸载。
+
+同一件事按**最终收尾那一轮定的九行口径**再列一遍（`PASS` = 有实测证据、
+`VERIFY` = 部分证据但缺关键一环、`CONFIG` = 只有配置与资产、`N/A` = 该平台没有这个东西）：
+
+```text
+FILETOOLS PLATFORM MATRIX
+
+                Web       Android   iOS         Windows
+UI              PASS      PASS      CONFIG      PASS
+Build           PASS      PASS      N/A         PASS
+Real Device     PASS      VERIFY    N/A         PASS
+Branding        PASS      PASS      PASS        PASS
+Conversion      PASS      VERIFY    N/A         VERIFY
+Download        PASS      VERIFY    N/A         VERIFY
+Share           N/A       VERIFY    N/A         N/A
+Install         N/A       VERIFY    N/A         PASS
+Uninstall       N/A       VERIFY    N/A         PASS
+```
+
+**两处 `VERIFY` 是降级下来的，不是凑绿**：
+
+- **Windows · Conversion / Download** —— 后端联通已实测（WebView2 的网络进程真的连上
+  `:8000`、CORS 放行 `http://tauri.localhost`、`/api/health` 返回 `{"status":"ok"}`），
+  落盘那三条防线（中文名 / 路径穿越 / 重名）由 **13 条 Rust 单元测试**打在生产函数上、
+  已实跑通过。**但「在真实桌面窗口里从头走完一次转换并点下载」没有证据** ——
+  取证要开 WebView2 的远程调试端口再用 CDP 驱动，而那个端口本机开不出来（原因见
+  「已知限制」第 27 条），所以不填 `PASS`。
+- **Android 的 Real Device / Conversion / Download / Share / Install / Uninstall** ——
+  原生路径在 AVD 上真跑通过，但**没有物理设备**上的独立验收。其中「Install」指的是
+  装上 Expo Go 之外的自家安装包，这一条没做过。
+
+### 当前支持平台
+
+```text
+Web
+Windows x64
+Android
+iOS configuration
+```
+
+**注意最后一行写的是 `iOS configuration` 而不是 `iOS`。** 本机是 Windows，
+没有 Xcode，`expo run:ios` 一行都跑不了 —— 能确认的只有配置与资产，见下。
+
+### 当前真实状态
+
+这五件事在中文里都容易被一句「做好了」糊过去，所以分开说：
+
+| 状态 | 含义 | 本项目的对应事实 |
+| --- | --- | --- |
+| **Implemented** | 代码写完了 | 四个平台客户端 + 全部工具（19 种格式 / 70 条转换 / 7 个 PDF 操作） |
+| **Built** | 真的产出过二进制或产物 | Web `frontend/dist/` · Windows `FileTools.exe` + `FileTools-Setup-x64.exe` · Android `npx expo export --platform android` |
+| **Verified** | 在真实环境跑过，且留下了读数 | Web 真实浏览器（2,074 项断言）· Windows 安装→启动→卸载全流程 · Android 原生路径（AVD，真 UI 驱动，转换/下载/分享都走通）· 后端 1,645 条 pytest |
+| **Not verified** | 没有可靠证据 | **iOS 的任何运行时行为**（不是「大概没问题」，是没测过） |
+| **Environment limited** | 不是没做，是本机够不着 | iOS 构建（无 macOS）· Android 独立真机验收（无物理设备）· Windows ARM64（无对应 target）· `docker build`（本机无 docker） |
+
+**「配置存在」不等于「真机验证完成」** —— 这条是本节存在的唯一理由：
+
+- **iOS**：`app.json` 里的 `ios.bundleIdentifier`、`supportsTablet`、1024 图标
+  （**无 alpha 通道，像素已量过**）全部就位，TypeScript 0 错误，路由与代码一致。
+  **但 `expo run:ios` 一次都没跑过。** 所以 iOS 是 **CONFIG**，不是 PASS。
+- **Android**：封板那 107/107 是在 **Expo Web**（真实浏览器，375/390/414 三档）上跑的；
+  另有 AVD `filetools11a`（Android 15 / x86_64）上的原生路径实测记录 —— 真实转换、
+  真实下载、真实分享都走通了，结果文件名也是对的。**但没有一份独立的物理设备验收**，
+  所以矩阵里是 ⚠️ / VERIFY，不是 ✅。
+
+---
+
 ## 技术栈
 
 **前端**：React 18 · TypeScript 5.6 · Tailwind CSS 3 · Vite 5.4 · React Router 6
+
+**桌面**：Tauri 2.12 · Rust · WebView2 · NSIS（复用同一份 React 前端产物）
+
+**移动**：React Native · Expo SDK 57
 
 **后端**：Python 3.14 · FastAPI 0.141 · Uvicorn 0.53 · Pillow 12.3 · PyMuPDF 1.28 · python-docx 1.2 · LibreOffice headless（可选）
 
@@ -761,9 +1252,9 @@ FileTools/
 ├── .dockerignore                   # 防止 COPY 把 Windows 的 .venv 拖进 Linux 镜像
 ├── .env.example                    # 全部 65 个 FILETOOLS_* 变量清单（后端进程**不读** .env）
 ├── .gitattributes / .editorconfig / .nvmrc   # 换行符、缩进、Node 版本
-├── .github/workflows/ci.yml        # CI：pytest + 前端构建。**未在 GitHub 上跑过**
-├── README.md                       # 本文
-├── SECURITY.md                     # 漏洞上报渠道 +「本项目没有认证」的部署警告
+├── .github/workflows/ci.yml        # CI：pytest + 前端构建
+├── VERSION                         # ★ 四个平台唯一的版本号来源（见「品牌资产」）
+├── README.md                       # 本文（漏洞上报渠道见「安全措施」一节）
 ├── LICENSE                         # AGPL-3.0（为什么不是 MIT，见下面「许可证」一节）
 ├── backend/
 │   ├── main.py                     # FastAPI 入口：中间件、异常处理、路由挂载、静态资源托管
@@ -846,7 +1337,10 @@ FileTools/
 │
 ├── frontend/
 │   ├── index.html · vite.config.ts · tailwind.config.js
-│   ├── public/favicon.svg
+│   ├── public/                     # 由 branding/generated/web/ 安装：favicon.svg / favicon.ico /
+│   │                               # apple-touch-icon.png / icon-192 / icon-512 /
+│   │                               # manifest.webmanifest / filetools-logo.svg
+│   ├── dist/ · dist-desktop/       # 两份产物：后端托管的网页版 / Tauri 打包用的桌面版
 │   └── src/
 │       ├── main.tsx · App.tsx      # 路由表
 │       ├── config/tools.ts         # 工具清单（首页卡片与导航的唯一数据源）
@@ -869,14 +1363,82 @@ FileTools/
 │                                   # 最近处理（history.ts）、统一转换（conversion.ts /
 │                                   # conversionOptions.ts）、能力开关（serverFeature.ts）
 │
+├── mobile/                         # Expo（React Native）移动 App，见下方独立树
+│
+├── desktop/                        # ★ 第十一阶段 A 补充：Windows 桌面版（Tauri 2）
+│   ├── package.json                # 只有 @tauri-apps/cli 一个 devDependency（**刻意不写 version**）
+│   ├── artifacts/                  # FileTools-Setup-x64.exe 落这里（构建产物，不进版本库）
+│   └── src-tauri/
+│       ├── Cargo.toml · build.rs · tauri.conf.json · capabilities/default.json
+│       ├── icons/                  # 由 branding/generated/windows/ 安装过来
+│       └── src/                    # main.rs / lib.rs / result_files.rs
+│                                   # ★ 只有「落盘」与「调资源管理器」，没有任何转换引擎
+│
+├── branding/                       # ★ 四平台品牌真源与全部产物，见下方独立树
+│
 └── scripts/
     ├── verify_phase2.py … verify_phase10a.py   # 各阶段的真实浏览器 / 真机验收脚本
     ├── verify_phase9a_live.py                  # 后端真机验收（并发、指标、看门狗）
     ├── verify_phase10.py                       # ★ 第十阶段封板入口（210 项断言）
+    ├── verify_mobile_phase11a.py               # ★ 第十一阶段 A 封板入口（移动端 107 项断言）
+    ├── sync_version.py                         # ★ 把 VERSION 写进各消费方（幂等；--check 只校验）
+    ├── generate_branding.py                    # ★ 从唯一真源生成四平台全部图标（--check 只校验）
+    ├── verify_branding.py                      # ★ 品牌验收：真源、四平台图标、命名、版本、Docker
+    ├── build_windows.py                        # ★ 真构建：产出 FileTools.exe 与安装器（附 sha256）
+    ├── verify_desktop.py                       # ★ 桌面验收：六项检查，能构建就真的构建一次
+    ├── verify_final.py                         # ★ 最终总验收入口：横切四个平台，环境够不着的写 NOT EXECUTED
     ├── verify_markup_live.py / verify_text_live.py  # 标记语言 / 文本转换的真机验收
     ├── probe_ocr.py                            # 探测本机 OCR 组件是否可用
     ├── acceptance_final.py                     # 跨阶段总验收
     └── make_office_fixtures.py                 # 生成旧格式测试样张（.doc / .xls / .ppt）
+```
+
+### 品牌目录（`branding/`）
+
+```text
+branding/
+├── source/                         # ★ 全仓库唯一的两个 SVG，其余全是它们的副本
+│   ├── filetools-icon.svg          # App 图标：正方形、铺满、不含任何文字
+│   └── filetools-logo.svg          # 品牌锁排：[Icon] + 字标 FileTools
+└── generated/                      # 全部由 scripts/generate_branding.py 生成
+    ├── manifest.sha256             # 源与所有输出的哈希清单
+    ├── web/                        # → frontend/public/
+    ├── android/                    # → mobile/assets/（含 5 档 mipmap）
+    ├── ios/                        # icon-1024.png，无 alpha
+    └── windows/                    # → desktop/src-tauri/icons/
+```
+
+### 移动端目录（`mobile/`）
+
+```text
+mobile/                          # Expo（React Native）+ TypeScript，独立于 Web 前端
+├── app.json · tsconfig.json · .env.example
+├── app/                         # expo-router 的文件式路由，文件名就是 URL
+│   ├── _layout.tsx              # 根布局：主题 Provider + 能力 Provider + 错误边界
+│   ├── (tabs)/                  # 底部四个标签页（分组约定，不出现在 URL 里）
+│   │   ├── _layout.tsx          # 标签栏本身
+│   │   ├── index.tsx · tools.tsx · history.tsx · profile.tsx
+│   ├── convert/[capabilityId].tsx   # 转换页：动态参数表单 + 上传 + 提交
+│   └── task/[batchId].tsx           # 任务页：有界轮询、下载 / 分享、取消
+├── src/
+│   ├── screens/                 # 五个页面组件（路由文件只做转发）
+│   ├── components/              # AppText / Button / Card / OptionForm / ProgressBar /
+│   │                            # Screen / States / ToolRow
+│   ├── services/
+│   │   ├── api/                 # client.ts（统一错误处理）+ capabilities / config /
+│   │   │                        # conversion / tasks 四个端点封装
+│   │   ├── filePicker.ts        # 选文件（DocumentPicker）
+│   │   ├── download.ts          # 下载结果（FileSystem）
+│   │   ├── share.ts             # 分享 / 用别的 App 打开（Sharing）
+│   │   └── history.ts           # 本地历史（AsyncStorage，**只存元数据**）
+│   ├── hooks/useBatchPolling.ts # 有界轮询：有上限、settle 即停、卸载即停
+│   ├── state/CapabilitiesProvider.tsx  # 全 App 唯一的能力来源
+│   ├── storage/kv.ts            # AsyncStorage 薄封装（Web 上落到 localStorage）
+│   ├── theme/                   # 设计令牌（tokens.ts）+ 浅色/深色/跟随系统
+│   ├── types/                   # 与后端响应对应的类型
+│   └── utils/                   # 参数序列化（options.ts）、错误码文案（errorMessages.ts）、
+│                                # 展示文案（labels.ts）
+└── assets/                      # 图标与启动图
 ```
 
 > `make_office_fixtures.py` 不是给部署用的，是给测试用的：它把手写的极简 flat XML
@@ -1175,11 +1737,31 @@ convert_txt_to_pdf(source, work_dir, *, options) -> tuple[Path, list[str]]
 | 情况 | 返回 |
 | --- | --- |
 | 找不到 LibreOffice | `503 CONVERTER_UNAVAILABLE`「当前服务器缺少 Office 转换组件，请联系管理员。」 |
-| 没有输出且 exit != 0 | `400 CORRUPTED_FILE`「无法读取该 Office 文件，请检查文件是否损坏。」 |
-| 其他无输出 / 输出为空 | `422 PROCESSING_FAILED`「文件转换失败，请尝试重新上传文件。」 |
+| 没有产物，且判为**源文件读不了** | `400 CORRUPTED_FILE`「无法读取该 Office 文件，请检查文件是否损坏。」 |
+| 没有产物，但不是上面那种 | `422 PROCESSING_FAILED`「文件转换失败，请尝试重新上传文件。」 |
 | 超时 | `504 PROCESSING_TIMEOUT` |
 
 > 缺组件的检查在**落盘之前**做：不为一个注定失败的请求把 50 MB 写进磁盘。
+
+**「源文件读不了」不是一个退出码就能判的。** 同一个损坏的 `.docx`，本机（Windows）上
+`soffice` 退出码是 **1**，而 CI 的 Linux runner 上实测是 **0**。只押退出码，Linux 上就会把
+「文件已损坏」（该做的是重新拿一份文件）说成「转换失败」（该做的是重试），
+用户于是反复重传一份永远传不好的文件。
+
+所以 `_source_could_not_be_loaded()` 用**三个并列的信号**，任一成立即判为读不了：
+
+1. **进程结果** —— 退出码非 0；
+2. **输入校验** —— OOXML 的主部件（`word/document.xml`、`xl/workbook.xml`…）在不在、
+   是不是**良构的 XML**（`office/loader.py::ooxml_main_part_is_broken`；流式 expat，不建树，
+   遇到实体声明直接判不良构，顺手挡住 billion laughs 与 XXE）。**这一条与平台无关**，
+   补上的正是第 1 条在不同平台上不一致的那条缝；
+3. **进程输出** —— `stderr` 里那句 `could not be loaded`。这只是**补充**信号：
+   它是 LibreOffice 的英文原样输出，换个本地化版本可能就变语言了，所以不当主判据。
+
+三条都**只在没有任何产物时**才被问到；有产物就走上面那条产物复验的路。
+所以一个能转出可用 PDF 的文件永远不会被它们误伤 —— 有一条反向护栏测试钉着这件事：
+**结构完全正常**的 `.docx`、退出码 0、却没有产出，必须仍然是 `422`（可以重试），
+不许被顺手改判成 `400`。
 
 ### TXT：本服务自己排版
 
@@ -1696,8 +2278,30 @@ VITE_BACKEND_URL=http://192.168.1.10:8000 npm run dev
 > 也**没有速率限制**。任何能访问到端口的人都能使用全部功能并消耗服务器的 CPU 和磁盘。
 > 默认监听 `0.0.0.0` 是为了本机/局域网调试，**不要直接暴露到公网** ——
 > 要给别人用请在前端套一层带认证的反向代理。
-> 完整说明、已实现的防护清单、以及**明确不在防护范围内**的事项见
-> [SECURITY.md](SECURITY.md)（漏洞请走该文件里写的私有上报渠道）。
+
+### 报告漏洞
+
+请用 GitHub 自带的**私有漏洞上报**，不要开公开 issue：
+
+> 仓库页 → **Security** 标签 → **Report a vulnerability**
+
+这条路是私密的，只有维护者能看到，也省得留邮箱 —— **本仓库刻意不写任何电子邮箱**。
+如果你克隆的这份副本没有启用私有上报（仓库 Settings → Security 里可以开），
+那就直接开一个 issue，但**只写「哪一类问题」**，不要贴可复现的利用细节，细节等私下沟通时再给。
+请一并说明：
+
+- 影响的是哪个版本 / 哪次提交（`/api/health` 会返回版本号）
+- 部署方式：直接 `uvicorn` 跑，还是 Docker
+- **服务是否对公网开放** —— 这条最关键
+- 最小复现步骤，以及一个能触发问题的样本文件（如果方便）
+
+### 部署者还必须知道：转换引擎本身就是信任边界
+
+「没有认证」「没有速率限制」这两件写在上面那段警告里。第三件单独说：
+图片、PDF、Office 文档分别交给 **Pillow、PyMuPDF、LibreOffice** 解析，
+**这些库解析恶意构造的文件时，崩溃、卡死、内存暴涨都是可能的**。
+本项目的上限配置能挡住大部分资源耗尽，**但挡不住底层库自身的解析漏洞**。
+处理来源不明的文件时建议在容器里跑，并给容器设 CPU / 内存配额。
 
 对应需求中的 10 条文件安全要求：
 
@@ -1764,9 +2368,35 @@ VITE_BACKEND_URL=http://192.168.1.10:8000 npm run dev
 - 预览接口只接受 `job_id` + 整数下标，不接受路径。
 - 响应带 `X-Content-Type-Options: nosniff`。
 - CORS 默认只放行本地开发地址。
+- **后端不发起任何出站网络请求**：生产代码里没有 `urllib.request` / `http.client` / `requests` /
+  `httpx` / `aiohttp`，唯一的 `urllib` 用法是纯字符串解析的 `urllib.parse`。测试里有一项就是
+  起一个本地 HTTP 服务、断言**收不到**任何请求。
 
 > 已知限制：超时后线程池中的任务无法被强制中断（Python 线程不可取消），但临时目录仍会被正确清理。
 > 生产环境建议在前面加一层反向代理限制请求体大小和连接数。
+
+### 明确不在防护范围内
+
+写出来是为了不给你虚假的安全感：
+
+1. **认证、授权、多租户** —— 完全不提供（见本节开头）。
+2. **速率限制、配额、滥用防护** —— 完全不提供。单个客户端可以持续提交任务把 worker 池占满。
+3. **底层解析库的漏洞** —— Pillow / PyMuPDF / LibreOffice / 各家编解码器自身的安全问题，
+   本项目的上限配置**不能替代它们的补丁**。
+4. **恶意的 `data:` 内嵌资源** —— 内联图片是允许的，一个精心构造的内联图片同样能消耗解析资源
+   （仍受上面的图片像素上限约束）。
+5. **持久化与审计** —— 任务状态是**单进程内存态，重启即丢**，没有数据库，
+   也没有访问日志之外的审计能力。
+6. **经过加固的公网服务** —— 本项目是自托管的本地工具，**不是**面向公网的多用户服务，
+   别拿它当后者用。
+
+### 支持的版本与依赖安全
+
+项目处于 **0.1.x**，**只维护默认分支的最新提交** —— 旧提交不单独回补修复，请先更新到最新再复现问题。
+
+依赖固定在 `backend/requirements.txt` 与 `frontend/package-lock.json`，
+定期检查两处更新是部署者的日常工作 —— 尤其是 **PyMuPDF、Pillow、LibreOffice**
+这三个直接解析不可信输入的部分。
 
 ---
 
@@ -1774,7 +2404,7 @@ VITE_BACKEND_URL=http://192.168.1.10:8000 npm run dev
 
 ### 后端单元 / 接口测试
 
-后端有 **1632 项测试**，覆盖十个阶段全部功能的正常流程、边界情况和安全校验：
+后端有 **1633 项测试**，覆盖十一个阶段全部功能的正常流程、边界情况和安全校验：
 
 ```bash
 cd backend
@@ -1785,7 +2415,7 @@ pytest -o addopts= -q
 预期输出：
 
 ```text
-1632 passed
+1633 passed
 ```
 
 > `pytest.ini` 里设了 `addopts = -q`，上面的 `-o addopts=` 是把它临时清掉，
@@ -1840,7 +2470,21 @@ CI 里**刻意不跑** `scripts/verify_phase*.py` —— 那一批要真实 Chro
 `@requires_ocr` 的用例在 CI 上是 **skip**。**CI 全绿不等于 Office 转换与 OCR 被验证过** ——
 那两样只有在装了组件的机器上跑完整回归才算数。
 
-> ⚠️ 这份工作流没有在 GitHub 上实测过（开发机不出网）。
+> **这份工作流已经在 GitHub 上真跑过**，不是纸面配置。跑出来的几条教训都留在提交历史里：
+>
+> - **不要假设「红的就是代码坏了」。** 第一轮后端 job 的 **29 条红全部来自 runner 缺组件**
+>   （LibreOffice / OCR），不是代码缺陷；补装 `pillow-heif` 之后 HEIC 那 7 条也不再跳过。
+>   反过来同样成立 —— 见下面最后一条。
+> - **诊断块曾经把自己弄瞎**：`pytest -rs` 顶掉了默认的 `-rfE`，红了一片却**一条失败行都看不到**。
+>   为了看得更清楚而加的旗标，把最该看的东西挤掉了。
+> - **最值得记住的一条**：Linux runner 上 PDF 里的字被**静默换掉**、产物体积翻了上千倍 ——
+>   原因是 CI 自己装的 `fonts-noto-cjk` 把系统默认字体换成了一份 **MuPDF 读不了**的
+>   `NotoSansCJK-Regular.ttc`。**CI 自己装的东西把 CI 弄红了**，而且红得看起来像代码问题。
+> - **同一个坏文件，退出码在两边不一样。** 「损坏文档要报 400」那条用例在本机（Windows）一直绿，
+>   在 Linux runner 上是红的 —— 因为同一个损坏的 `.docx`，`soffice` 在 Windows 上退出码是 **1**、
+>   在 Linux 上是 **0**。**押平台相关的信号做业务归类，等于把平台差异写进了用户看到的文案。**
+>   修法的关键是换成一条与平台无关的判据（源文件的主部件是不是良构 XML），
+>   并把 Linux 的那种返回**写成一条不依赖 LibreOffice 的测试**，这样在任何机器上都能复现那条缝。
 
 ### 真实浏览器 / 真机验收
 
@@ -1861,6 +2505,11 @@ CI 里**刻意不跑** `scripts/verify_phase*.py` —— 那一批要真实 Chro
 | `scripts/verify_phase9a_live.py` | 744 / 744 | 后端**真机**验收：真的提交任务、真的并发、真的看指标 |
 | `scripts/verify_phase10a.py` | 73 / 73 | 高级图片引擎的浏览器端 |
 | **`scripts/verify_phase10.py`** | **210 / 210** | **第十阶段封板入口**，11 个分段（A 24 / B 21 / C 13 / D 11 / E 14 / F 15 / G 15 / H 10 / I 12 / J 33 / G3 42） |
+| **`scripts/verify_mobile_phase11a.py`** | **107 / 107** | **第十一阶段 A 封板入口**，5 个分段（A 反漂移 25 / B 与真服务器对账 8 / C 三条真实链路 19 / D 界面行为 36 / E 任务生命周期：取消与重试 19） |
+| **`scripts/verify_branding.py`** | **全绿** | 品牌验收：唯一真源、四平台图标尺寸与像素、App 名、版本一致性、`Dockerfile` 的 `COPY VERSION` |
+| **`scripts/verify_desktop.py`** | **48 / 48** | 桌面验收：Tauri 配置、标识符、版本、Windows 图标，**并真的跑了一次 Tauri 构建** |
+| **`scripts/verify_final.py`** | **91 / 91** | **最终总验收入口**：版本 / 品牌 / 单一真源 / Web / 后端 / 移动 / 桌面 / 脚本齐备的横切检查。环境够不着的项（docker build、iOS 构建、Android 真机、ARM64）输出 `NOT EXECUTED` 并写明原因，**不写成 PASS** |
+| 桌面端安装包 **真机装一遍** | **通过** | 走完向导逐页核对 → 装 → 开 → 卸载，安装目录 / 两个快捷方式 / 注册表项全部清除 |
 
 跑法（以第十阶段为例）：
 
@@ -1887,6 +2536,8 @@ python scripts/verify_phase10.py
 | `FILETOOLS_WEB_BASE` | `http://localhost:5173`（2/3 阶段）/ `http://127.0.0.1:8011`（4 阶段起） | 前端地址 |
 | `FILETOOLS_BACKEND_PY` | `backend/.venv` 下的解释器 | 用来生成测试素材、解码结果文件 |
 | `FILETOOLS_WORK_DIR` | 新建临时目录 | 指定后测试素材会保留复用（第二次跑快很多） |
+| `FILETOOLS_API_BASE` | `http://127.0.0.1:8011` | 仅 `verify_mobile_phase11a.py`：后端地址（移动端脚本自己起请求、也用来对账能力目录） |
+| `FILETOOLS_APP_BASE` | `http://localhost:8081` | 仅 `verify_mobile_phase11a.py`：Expo Web dev server 地址（移动 App 在浏览器里的运行目标） |
 
 验收报告会写入 `scripts/*_report.txt`（**该文件在 `.gitignore` 里**，是每次跑都会重写的产物）。
 
@@ -1910,12 +2561,75 @@ python scripts/verify_phase10.py
 12. **看门狗击杀 + 自动重试路径上会重复执行一次重活**（对纯 CPU 的转换意味着浪费一次算力，不是错误结果）。
 13. **`_ENGINE_LOCK` 的获取是无界的**：极端情况下一个卡死的转换会让后续排队等下去（看门狗最终会处理，但等待期间是阻塞的）。
 14. **HTML → PDF 只允许内联资源**：含外链图片的 HTML 转出来会缺图（如实提示，不是 bug）。
-15. **Docker 部署与 CI 工作流都未经实测**：开发机是 Windows，没有 Docker、也不出网。
-    仓库根目录的 `Dockerfile` / `.dockerignore` 与 `.github/workflows/ci.yml`
-    是按官方文档与本地已验证的命令写的，首次使用请以你自己的构建 / 首次 CI 运行结果为准。
+15. **Docker 部署未经实测**：开发机是 Windows，没有 Docker。仓库根目录的 `Dockerfile` /
+    `.dockerignore` 是按官方文档与本地已验证的命令写的，首次使用请以你自己的构建结果为准。
+    （`verify_branding.py` 会断言 `Dockerfile` 里有 `COPY VERSION` —— 镜像只 `COPY backend/`，
+    少了这一行容器里报出的版本号会是错的。）
+    **CI 工作流则已经真跑过**，战况与教训见[CI 覆盖什么](#ci-覆盖什么)。
 16. **图片池的聚合并发倍数在本机约 1.5×，不是 2×** —— 图片处理有相当一部分卡在 CPython 的 GIL 上。用受 GIL 限制的负载去要求并发收益，考的是解释器而不是队列。
 17. **LibreOffice 的 profile 目录不会被自动回收**（`office-converter-profile-*` 刻意不含 `filetools` 前缀，免得被孤儿清理误删）。
 18. **PDF 结果没有内联缩略图**（预览端点只服务浏览器原生能解的图片格式），PDF 照样能下载。
+19. **移动端不做离线转换**：转换永远在服务器上做，App 只负责选文件、提交、显示进度、下载。
+    没有服务器时 App 会如实报网络错误，**不会**在本地偷偷实现第二份转换逻辑。
+20. **移动端的历史只在本机**：换设备、重装 App 之后记录就没了，也没有与服务端同步的打算
+    （服务端本来就不存历史）。本地记录里也**只有元数据**，没有文件内容。
+21. **移动端不提供那 7 个 PDF 操作的入口**：它们是「多进多出 / 页面级」操作，与这一版 1→1 的
+    移动端流程模型不同 —— 与其做一个半吊子的入口，不如不做，并在这里写明。
+22. **移动 App 在后端前面没有任何独有权限**：它用的就是公开的那套 API，没有移动专用的密钥或后门。
+23. **Windows 桌面版只出 x64**：本机 `rustup target list --installed` 只有 `x86_64-pc-windows-msvc` 一个 target，
+    **ARM64 版本没有构建过**，也不假装有。要出 ARM64 需要在 ARM 机器上或装了交叉工具链的机器上重新构建。
+24. **iOS 一行实测都没有**：本机没有 macOS，iOS 只做到「配置存在 + 图标就位 + 1024 无 alpha 已实测」，
+    没有跑过 Xcode 构建、没有上过真机、没有上过模拟器。
+25. **安装器文件名是复制出来的**：Tauri 的原生产物名固定是 `FileTools_<版本>_x64-setup.exe`，
+    **没有改名配置项**，所以由 `build_windows.py` 复制成 `FileTools-Setup-x64.exe`（报告里附两份 sha256）。
+26. **桌面端的拖拽只在文件选择区生效**，不是窗口任意位置 —— 原生拖放被关掉了（不关会吃掉 HTML5 的 drop），
+    这是走网页拖放的必然结果。
+27. **桌面版没有开 CSP**（`csp: null`）。这不是「没顾上」，是按实测评的：
+    把一份候选 CSP 加到头里、用真实浏览器加载**真的 `dist-desktop` 产物**跑过一遍 ——
+    0 条 CSP 违规、界面正常渲染、对 `http://127.0.0.1:8000` 的请求也确实被放行
+    （那边失败的是 CORS，不是 CSP）。**但只验到了这一半**：Tauri 的 IPC 走
+    `ipc:` 协议（`tauri-2.12.1/src/manager/webview.rs` 里注册的），官方要求在
+    `connect-src` 里放行 `ipc: http://ipc.localhost`，而这一半**没能在本机实测** ——
+    想看它到底发了哪些请求就得挂进 WebView2 的调试端口，而那个端口**在本机打不开**。
+    原因查到了，很具体：设 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9333`
+    启动之后，**所有 WebView2 子进程的命令行里一个 `--remote-debugging-port` 都没有**，
+    而 tauri 自己的 `--disable-features=msWebOOUI,msPdf` 在场 —— 说明 wry 走的是
+    `AdditionalBrowserArguments`，把那个环境变量顶掉了。要开这个端口就得改**出厂配置**
+    （`tauri.conf.json` 的 `additionalBrowserArgs`）并重新构建；为了测试去动出厂配置不值当，
+    所以这条到此为止，**不假装验过**。
+    既然有一半是**没验证过的**，就不为了「看起来更安全」打开它：宁可留 `null` 并写在这里。
+    将来要开，`connect-src` 至少要有构建期烤进去的后端地址 **和** `ipc: http://ipc.localhost`。
+28. **桌面版的后端地址是构建期烤死的**（`http://127.0.0.1:8000`，与页脚「本工具在本地部署运行」一致）。
+    换服务器地址要**重新构建**，界面上没有服务器地址设置项 —— 这是刻意的，避免多出一个能填错的地方。
+29. **品牌 Logo 的字标用的是 SVG `<text>`**，依赖系统字体，**没有转曲**，跨机器字形可能有细微差异。
+    App 图标不含文字，不受影响。viewBox 定成 `0 0 132 32` 是**量出来的** ——
+    实测「FileTools」在 17px/600 下的右边界：Segoe UI 108.3、system-ui 116.2、Arial 115.4、
+    Tahoma 117.6、SimSun 121.5、Verdana 126.8，132 全部兜得住，各平台外框尺寸也就一致。
+    **没有用 `textLength`**：最初写了 `textLength="84"` 想钉死宽度，实测反而是错的 ——
+    Segoe UI 下自然宽只有 66.9，`textLength` 会把它**撑到** 84.7、字距拉开 27%，
+    `File` 和 `Tools` 中间裂出一道明显的缝；而字体更宽时 `lengthAdjust="spacing"` 又会改成
+    负字距、让字**重叠**。两个方向都是坑，所以交给字体自然排版。
+30. **只出 NSIS 的 `.exe`**，没有做 WiX / MSI。
+31. **首次安装的向导里不显示版本号**：这是 NSIS 默认模板的行为，没有为了让它出现在欢迎页去改模板。
+    版本号在另外两处可见 —— 已经装过时维护页的 `FileTools 0.1.0 已经安装了`，
+    以及「设置 → 应用」里的卸载条目（`DisplayVersion`）。
+32. **Tauri 的 `identifier` 以 `.app` 结尾**（`com.filetools.app`），这在 macOS 上会与 bundle 扩展名冲突，
+    构建时 Tauri 会就此告警。**故意保持原样**：这个标识符是移动端 `app.json` 里
+    `ios.bundleIdentifier` 与 `android.package` 逐字相同的那一个，为了一个没有 Tauri 客户端的平台去改名，
+    会破坏「四个平台同一个身份」。
+33. **桌面版「在真实窗口里点一次转换」这一条没做到** —— 第 27 条那个调试端口打不开的同一个原因，
+    挡住的还有这条路：本轮桌面端验到的是「安装 → 启动 → 窗口真的渲染出来（读到 107 个非空控件名）
+    → WebView2 网络进程真的连上 `:8000` → `/api/health` 真的返回 `{"status":"ok"}`」，
+    以及 `save_result` / `open_result` / `reveal_result` 所依赖的
+    `sanitize_filename` / `unique_path` 有 **13 条 Rust 单元测试**在跑真函数。
+    但**从真实窗口里驱动一次完整转换并落盘，本轮没有执行**，所以四平台矩阵里 Windows 的
+    Conversion / Download 写的是 `VERIFY` 而不是 `PASS`。
+34. **图标近透明像素的 RGB 会有偏差**：Chromium 在预乘 alpha 空间合成后再反预乘，会把量化误差
+    放大到 alpha ≤ 4/255 的那一圈像素上 —— 实测 512×512 图里共 46 个，最坏一个合成到白底的
+    误差是 **0.4/255**，不可见；alpha ≥ 44 的像素颜色都准确。这是渲染管线的固有行为，
+    没有可靠的修法，如实记录。
+35. **Web 的 192/512 图标是 `plain`（圆角外透明），不是 `maskable`**：将来若要上 Android 的
+    PWA 安装横幅，需要再补一版 `purpose: "maskable"` 的图标。
 
 ---
 
@@ -2025,8 +2739,10 @@ PNG 是无损格式，压缩能力天然弱于 JPEG，照片类图片转 PNG 通
 - ~~**第九阶段**：统一转换中心 2.0（能力配置驱动、53 → 70 条转换、17 → 19 种格式）~~ ✅ 已完成
 - ~~**第十阶段 A**：高级图片引擎（HEIC / SVG / 几何操作 / 元数据 / 预览 / 高级批量）~~ ✅ 已完成
 - ~~**第十阶段 C**：图片引擎收尾与最终加固（HEIC 依赖拆分、图片炸弹测试、TIFF XMP、预览边界、全面审计）~~ ✅ 已完成
+- ~~**第十一阶段 A**：移动 App 基础框架（Expo / React Native，能力驱动、动态参数表单、本地历史）~~ ✅ 已完成
+- ~~**第十一阶段 A 补充**：Windows 桌面版（Tauri 2，复用 Web 前端产物）+ 四平台品牌统一（一份 Logo 真源、一份版本真源）~~ ✅ 已完成
 - **第十阶段 B**：RAW（CR2 / NEF / ARW / DNG）与 PSD —— 尚未开始
-- **第十一阶段**：音频（MP3 / WAV / FLAC / AAC）与视频（MP4 / AVI / MKV / MOV / WEBM）—— 尚未开始
+- **第十一阶段 B**：音频（MP3 / WAV / FLAC / AAC）与视频（MP4 / AVI / MKV / MOV / WEBM）—— 尚未开始
 
 各阶段刻意**没有引入**的东西：
 
@@ -2038,6 +2754,19 @@ PNG 是无损格式，压缩能力天然弱于 JPEG，照片类图片转 PNG 通
 - 第九、十阶段**同样没有为功能引入新的 Python 依赖**：BMP / GIF / TIFF / ICO 用 Pillow 自身的能力，
   SVG 栅格化用已有的依赖，TIFF 的 XMP 读写也没引入新库。
   **唯一一个可选依赖是 HEIC 的 `pillow-heif`，它被刻意隔离在 `requirements-heic.txt` 里**（理由见[可选组件](#可选组件heic--ocr)）。
+- 第十一阶段 A 的移动 App **必须**引入 React Native / Expo 那一套 npm 包 —— 这是「做一个真实的移动 App」
+  这个需求本身的前提，绕不过去。但要说清楚边界：**后端与 Web 前端 `frontend/` 的依赖一个字都没动**，
+  后端也没有新增任何 Python 依赖。移动端的依赖清单完全独立在 `mobile/package.json` 里，
+  不装它不影响 Web 版与后端，`npm run build` 也不会碰它。
+- 第十一阶段 A 补充的 Windows 桌面版**只引入了 Tauri 这一条构建链**
+  （`@tauri-apps/cli` + 四个 Rust crate + Tauri 自动下载的 NSIS）。
+  **没有引入 `tauri-plugin-opener`**（「打开 / 在文件夹中显示」用 `std::process::Command` 调
+  `explorer.exe` 就够了），**也没有引入 `@tauri-apps/api`**（用 `withGlobalTauri` 暴露的全局对象，
+  前端 npm 依赖零新增）。
+  更重要的是：**桌面端没有复制任何一份转换引擎** —— 里面没有 PDF、图片、Office、OCR、压缩的实现，
+  它和网页、手机一样只是**客户端**。品牌图标那条流水线也没有引入任何新依赖：
+  光栅化用本来就有的 Playwright + Chromium，编码用本来就有的 Pillow
+  （本机**没有** ImageMagick / Inkscape / rsvg / cairosvg，也没有为此去装）。
 
 **明确不做的功能**（这是需求的一部分，不是没来得及做）：
 

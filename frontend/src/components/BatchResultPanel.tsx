@@ -6,6 +6,7 @@ import { formatBytes, formatDimensions, formatLabel, formatPercent } from '@/uti
 
 import { Alert } from './Alert'
 import { Button } from './Button'
+import { DesktopSavedFile } from './DesktopSavedFile'
 import { IconCheckCircle, IconDownload, IconFile } from './Icons'
 import { ImageCompare, type CompareSide } from './ImageCompare'
 
@@ -19,6 +20,13 @@ interface BatchResultPanelProps {
   downloadError: string | null
   /** 结果已被下载（或已过期），服务器上的文件已经删除 */
   expired?: boolean
+  /**
+   * 桌面端下载时落盘的绝对路径，用来渲染「已保存到 … / 打开 / 在文件夹中显示」。
+   *
+   * 不传或传 `null` 就什么都不渲染 —— Web 上恒为 `null`，因为下载交给了
+   * 浏览器，我们既不知道也不该管它存到哪。
+   */
+  savedPath?: string | null
 }
 
 function toCompareSides(
@@ -102,6 +110,7 @@ export function BatchResultPanel({
   downloading,
   downloadError,
   expired = false,
+  savedPath = null,
 }: BatchResultPanelProps) {
   const [activeIndex, setActiveIndex] = useState(0)
 
@@ -267,6 +276,9 @@ export function BatchResultPanel({
             重新处理
           </Button>
         </div>
+
+        {/* 桌面端落盘之后的位置与后续动作（Web 上这个组件不渲染） */}
+        <DesktopSavedFile path={savedPath} />
       </div>
     </div>
   )

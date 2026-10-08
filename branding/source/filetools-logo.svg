@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 132 32" role="img" aria-label="FileTools">
+  <title>FileTools</title>
+  <!--
+    品牌锁排（Brand Logo）= App Icon + 字标。
+
+    左侧三笔 path 与 branding/source/filetools-icon.svg 逐字相同 —— 这是
+    「只有一个设计源」在文件层面的落实：改图标必须改那个文件，然后重新生成。
+
+    viewBox 定成 132 宽是**量出来的**，不是拍的。字标用 <text>，字形依赖运行
+    环境的字体，实测几种真实字体下「FileTools」在 17px/600 时的右边界：
+
+        Segoe UI（Windows 实际） 108.3 · system-ui / sans-serif 116.2
+        Arial / Helvetica Neue    115.4 · Tahoma 117.6
+        SimSun（纯中文字体）       121.5 · Verdana 126.8
+
+    取 132 覆盖上面全部实测值。锁排以 <img> 用时按 viewBox 的 132:32 出图，
+    所以任何平台上的外框尺寸都是同一个。
+
+    ⚠️ 这里**故意不写 textLength**。最初写了 textLength="84" 想让宽度确定，
+    实测反而是错的：Segoe UI 下自然宽只有 66.9，textLength 会把它**撑到**
+    84.7，字距被拉开 27%，「File」和「Tools」中间裂出一道明显的缝。
+    而 lengthAdjust="spacing" 在字体更宽时会改成负字距、让字**重叠**。
+    两个方向都是坑，所以交给字体自然排版，只用 viewBox 留够余量兜住。
+  -->
+  <g>
+    <rect width="32" height="32" rx="8" fill="#4f46e5" />
+    <path
+      d="M11 8h7.5L23 12.5V24a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 10 24V9.5A1.5 1.5 0 0 1 11.5 8Z"
+      fill="#fff"
+      opacity=".92"
+    />
+    <path d="M18 8l5 5h-5V8Z" fill="#c7d2fe" />
+    <path d="M13 18.5l2.8 3.2L18.4 18l2.6 4.5h-9l1-4Z" fill="#4f46e5" />
+  </g>
+  <text
+    x="42"
+    y="22.5"
+    font-family="'Segoe UI', 'Microsoft YaHei', system-ui, -apple-system, sans-serif"
+    font-size="17"
+    font-weight="600"
+    fill="#0f172a"
+  >FileTools</text>
+</svg>

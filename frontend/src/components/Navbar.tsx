@@ -17,11 +17,12 @@ export function Navbar() {
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/85 backdrop-blur">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
-        <Link to="/" className="flex items-center gap-2.5" aria-label="FileTools 首页">
-          <span className="grid h-8 w-8 place-items-center rounded-lg bg-brand-600 text-sm font-bold text-white">
-            F
-          </span>
-          <span className="text-lg font-semibold tracking-tight text-slate-900">FileTools</span>
+        {/* 品牌锁排（Brand Logo）= App Icon + 字标，来自 branding/ 的唯一真源。
+            这里**不放**自己写死的文字：字标换过一次就是一次漂移，
+            scripts/verify_branding.py 会比对全仓库有没有第三份图标。
+            h-8 配上 viewBox 的 132:32，出图正好 132×32。 */}
+        <Link to="/" className="flex items-center" aria-label="FileTools 首页">
+          <img src="/filetools-logo.svg" alt="FileTools" className="h-8 w-auto" />
         </Link>
 
         <nav className="hidden items-center gap-1 md:flex" aria-label="主导航">

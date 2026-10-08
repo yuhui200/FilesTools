@@ -115,6 +115,7 @@ export function PdfMerge() {
           onRestart={task.clearFiles}
           downloading={task.downloading}
           downloadError={task.downloadError}
+          savedPath={task.savedPath}
         />
       )}
 

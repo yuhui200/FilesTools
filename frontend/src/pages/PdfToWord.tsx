@@ -231,6 +231,7 @@ export function PdfToWord() {
           restartLabel="换一份 PDF"
           downloading={task.downloading}
           downloadError={task.downloadError}
+          savedPath={task.savedPath}
           expired={task.resultExpired}
         >
           <p className="mt-4 text-xs text-slate-500">

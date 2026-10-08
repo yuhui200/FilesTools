@@ -236,6 +236,8 @@ export function Convert() {
           maxBytes={config.max_upload_bytes}
           takenItems={task.takenItems}
           downloading={task.downloading}
+          savedItemPaths={task.savedItemPaths}
+          savedGroupPath={task.savedGroupPaths[group.id] ?? null}
           onChangeTarget={task.setTarget}
           onChangeOption={task.setOptionValue}
           onChangeSize={task.setSizeOptions}

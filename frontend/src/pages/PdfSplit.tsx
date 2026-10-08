@@ -152,6 +152,7 @@ export function PdfSplit() {
           onRestart={task.reset}
           downloading={task.downloading}
           downloadError={task.downloadError}
+          savedPath={task.savedPath}
         />
       )}
 

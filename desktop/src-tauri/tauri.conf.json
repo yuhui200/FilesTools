@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FileTools",
+  "identifier": "com.filetools.app",
+  "version": "../../frontend/package.json",
+  "build": {
+    "frontendDist": "../../frontend/dist-desktop",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm --prefix ../frontend run dev:desktop",
+    "beforeBuildCommand": "npm --prefix ../frontend run build:desktop"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "FileTools",
+        "width": 1280,
+        "height": 840,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true,
+        "center": true,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "category": "Utility",
+    "shortDescription": "简单、快速的本地文件工具",
+    "longDescription": "FileTools 桌面端：图片压缩与转换、PDF 处理与格式转换，全部由本机后端完成，文件不出本机。",
+    "icon": ["icons/icon.ico", "icons/icon-256.png"],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "startMenuFolder": "FileTools",
+        "languages": ["SimpChinese", "English"]
+      }
+    }
+  }
+}

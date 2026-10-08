@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -264,6 +265,118 @@ def test_corrupt_document_reports_the_corrupt_message(tmp_path: Path) -> None:
 
     assert excinfo.value.code == ErrorCode.CORRUPTED_FILE
     assert excinfo.value.message == "无法读取该 Office 文件，请检查文件是否损坏。"
+
+
+# ----------------------------------------------------------------------
+# 损坏文件的归类：**不能只押 soffice 的退出码**
+#
+# 同一个损坏的 .docx，本机（Windows）上 soffice 退出码是 1 ——
+# 上面那条 requires_soffice 的用例就是靠这个过的。但 CI 的 Linux runner 上
+# 退出码是 **0**，于是同一个文件被判成「转换失败」→ 422
+# 「请尝试重新上传文件」，而正确的话术是不该重传的「文件已损坏」。
+#
+# 下面这三条**不依赖 LibreOffice**（把 soffice 换成假实现），所以在本机与
+# CI 上跑的是同一段逻辑；它们钉住的正是上面那条缝。
+# ----------------------------------------------------------------------
+
+def _fake_soffice(
+    monkeypatch: pytest.MonkeyPatch, *, returncode: int, stderr: str = ""
+) -> None:
+    """把 soffice 换成「跑完了、但什么也没产出」的假实现。
+
+    ``returncode=0, 无产物`` 就是 Linux runner 上真实发生过的那种返回。
+    """
+    monkeypatch.setattr(office_converter, "_require_soffice", lambda: Path("soffice"))
+
+    def fake_run(binary: Path, source: Path, outdir: Path) -> subprocess.CompletedProcess:
+        return subprocess.CompletedProcess(
+            args=["soffice"], returncode=returncode, stdout="", stderr=stderr
+        )
+
+    monkeypatch.setattr(office_converter, "_run_soffice", fake_run)
+
+
+def _broken_docx(tmp_path: Path) -> Path:
+    """容器完整、正文 XML 是坏的 —— 与上面那条 requires_soffice 用例同一份样张。"""
+    from tests.conftest import zip_bytes
+
+    parts = {
+        "[Content_Types].xml": (
+            '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org'
+            '/package/2006/content-types"><Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.'
+            'wordprocessingml.document.main+xml"/></Types>'
+        ),
+        "word/document.xml": "<w:document>不是合法的 XML <<< 没有闭合",
+    }
+    source = tmp_path / "broken.docx"
+    source.write_bytes(zip_bytes(parts))
+    return source
+
+
+def test_broken_ooxml_is_corrupt_even_when_soffice_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**CI 上那条红的回归用例。**
+
+    Linux 上 soffice 对同一个损坏文件返回 0 且不产出任何东西。这种返回
+    必须仍然判成「文件损坏」（400 / CORRUPTED_FILE），而不是
+    「转换失败」（422 / PROCESSING_FAILED）—— 用户该做的是重新拿一份文件，
+    重传多少次都一样。
+
+    判据不是退出码，而是源文件自己的结构：``word/document.xml`` 不是良构 XML。
+    """
+    _fake_soffice(monkeypatch, returncode=0)
+    source = _broken_docx(tmp_path)
+
+    with pytest.raises(CorruptedFileError) as excinfo:
+        office_converter.convert_word_to_pdf(source, tmp_path)
+
+    assert excinfo.value.code == ErrorCode.CORRUPTED_FILE
+    assert excinfo.value.message == "无法读取该 Office 文件，请检查文件是否损坏。"
+
+
+def test_unloadable_stderr_is_corrupt_even_when_soffice_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """第二条信号：stderr 里明说读不了源文件。
+
+    用旧版 .doc（OLE2 二进制）—— 它没有 XML 主部件可判，所以这条走的
+    确实只有「退出码 + stderr」两条信号里的第二条。
+    """
+    _fake_soffice(
+        monkeypatch,
+        returncode=0,
+        stderr="Error: source file could not be loaded\n",
+    )
+    source = tmp_path / "legacy.doc"
+    source.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 2048)
+
+    with pytest.raises(CorruptedFileError) as excinfo:
+        office_converter.convert_word_to_pdf(source, tmp_path)
+
+    assert excinfo.value.code == ErrorCode.CORRUPTED_FILE
+
+
+def test_a_sound_document_that_produced_nothing_stays_a_processing_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """反向护栏：**不许把「转换失败」一律改判成「文件损坏」**。
+
+    一份结构完全正常的 .docx，soffice 退出码 0、没报错、却没有产出 ——
+    这仍然是「转换失败」（422，可以重试），不是「文件损坏」。
+    放宽成一律 400 会让用户以为自己手上的文件坏了，去重新导出一份，
+    而真正该做的是稍后重试。
+    """
+    _fake_soffice(monkeypatch, returncode=0)
+    source = tmp_path / "fine.docx"
+    source.write_bytes(build_docx_bytes())
+
+    with pytest.raises(ProcessingError) as excinfo:
+        office_converter.convert_word_to_pdf(source, tmp_path)
+
+    assert excinfo.value.code == ErrorCode.PROCESSING_FAILED
+    assert excinfo.value.message == office_converter.CONVERT_FAILED_MESSAGE
 
 
 @requires_soffice

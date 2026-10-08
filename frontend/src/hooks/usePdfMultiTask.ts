@@ -32,6 +32,12 @@ export interface PdfMultiTask<T extends PdfResultResponse = PdfResultResponse> {
   resultExpired: boolean
   downloading: boolean
   downloadError: string | null
+  /**
+   * 桌面端落盘后的绝对路径，供结果卡渲染「已保存到 … / 打开 / 在文件夹中显示」。
+   *
+   * Web 上恒为 `null`（下载交给浏览器，我们不知道也管不着它存到哪）。
+   */
+  savedPath: string | null
   addFiles: (incoming: File[]) => void
   removeFile: (index: number) => void
   moveFile: (from: number, to: number) => void
@@ -81,6 +87,8 @@ export function usePdfMultiTask<T extends PdfResultResponse = PdfResultResponse>
   const [resultExpired, setResultExpired] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState<string | null>(null)
+  // 桌面端落盘后的绝对路径；Web 上恒为 null（见 components/DesktopSavedFile.tsx）
+  const [savedPath, setSavedPath] = useState<string | null>(null)
 
   const abortRef = useRef<AbortController | null>(null)
 
@@ -129,6 +137,7 @@ export function usePdfMultiTask<T extends PdfResultResponse = PdfResultResponse>
 
       setFiles(next)
       setResult(null)
+      setSavedPath(null)
       setStage('idle')
     },
     [files, kind, maxFiles, maxTotalBytes, rules],
@@ -138,6 +147,7 @@ export function usePdfMultiTask<T extends PdfResultResponse = PdfResultResponse>
     setFiles((current) => current.filter((_, position) => position !== index))
     setResult(null)
     setDownloadError(null)
+    setSavedPath(null)
     setStage('idle')
   }, [])
 
@@ -155,6 +165,7 @@ export function usePdfMultiTask<T extends PdfResultResponse = PdfResultResponse>
     })
     setResult(null)
     setDownloadError(null)
+    setSavedPath(null)
     setStage('idle')
   }, [])
 
@@ -166,6 +177,7 @@ export function usePdfMultiTask<T extends PdfResultResponse = PdfResultResponse>
     setResult(null)
     setError(null)
     setDownloadError(null)
+    setSavedPath(null)
   }, [])
 
   const start = useCallback(() => {
@@ -179,6 +191,7 @@ export function usePdfMultiTask<T extends PdfResultResponse = PdfResultResponse>
     setDownloadError(null)
     // 上一次的结果已经下载掉了，这次是新的一份
     setResultExpired(false)
+    setSavedPath(null)
     setUploadPercent(0)
     setStage('uploading')
 
@@ -193,6 +206,7 @@ export function usePdfMultiTask<T extends PdfResultResponse = PdfResultResponse>
       .then((response) => {
         if (controller.signal.aborted) return
         setResult(response)
+        setSavedPath(null)
         setStage('done')
         // 一次请求处理一批文件，成功即整批成功，按上传的每个文件各记一笔（§12）
         recordHistory(
@@ -221,7 +235,9 @@ export function usePdfMultiTask<T extends PdfResultResponse = PdfResultResponse>
     setDownloading(true)
     setDownloadError(null)
     try {
-      await downloadResult(result.download_url, result.filename)
+      const outcome = await downloadResult(result.download_url, result.filename)
+      // 桌面端是「落盘」，Web 是「交给浏览器」，两边都算取走了
+      setSavedPath(outcome.kind === 'desktop' ? outcome.path : null)
       // 下载令牌是一次性的：下载成功后服务器就删了文件，
       // 标记一下，页面不再留一个点了必然报错的下载按钮
       setResultExpired(true)
@@ -235,6 +251,8 @@ export function usePdfMultiTask<T extends PdfResultResponse = PdfResultResponse>
   const reset = useCallback(() => {
     setResult(null)
     setDownloadError(null)
+    // 结果没了，落盘路径也得跟着没（与 usePdfInput.clearProgress 同理）
+    setSavedPath(null)
     setStage('idle')
   }, [])
 
@@ -249,6 +267,7 @@ export function usePdfMultiTask<T extends PdfResultResponse = PdfResultResponse>
     resultExpired,
     downloading,
     downloadError,
+    savedPath,
     addFiles,
     removeFile,
     moveFile,

@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import re
+import xml.parsers.expat as expat
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +53,7 @@ __all__ = [
     "detect_kind",
     "looks_like_ole2",
     "looks_like_ooxml",
+    "ooxml_main_part_is_broken",
     "validate_office_upload",
 ]
 
@@ -398,6 +400,85 @@ def count_powerpoint_slides(path: Path) -> int | None:
     「总数 − 导出页数」就是没导出的页数，不必再去翻每个部件。
     """
     return _count_tags(path, _PRESENTATION_PART, _SLIDE_TAG)
+
+
+def ooxml_main_part_is_broken(path: Path, kind: str) -> bool:
+    """OOXML 的主部件是不是**结构上就读不出来**。
+
+    与 :func:`_check_ooxml` 的分工：那个在**上传时**跑，只确认「包结构属于
+    所声称的类型」（有 ``[Content_Types].xml``、声明了这种类型、主部件在包里），
+    主部件里的 XML 是否**良构**它不看。这一份专看良构性。
+
+    **它只在「LibreOffice 跑完却什么也没产出」时被调用一次**
+    （见 ``services/office_converter.py``），用途是补上 soffice 退出码那条缝：
+    同一个损坏文件，Windows 上 soffice 退出码是 1，Linux 上是 0 ——
+    只押退出码会把「文件损坏」误判成「转换失败」，用户看到 422
+    「请尝试重新上传文件」，而正确的话术是不该重传的「文件已损坏」。
+
+    这里判的是**源文件自己的性质**，与平台、与 LibreOffice 的版本都无关，
+    所以它跨平台稳定。
+
+    三个返回 True 的情况：
+
+    * 包里根本没有主部件（上传校验之后又被改坏的，或者调用方绕过了校验）；
+    * 主部件读不出来（zip 结构坏了）;
+    * 主部件不是一段良构的 XML。
+
+    ``.doc`` / ``.xls`` / ``.ppt`` 是 OLE2 二进制，没有 XML 可判，返回 False ——
+    旧格式仍然只能靠退出码，这一点如实写在文档里，不假装覆盖到了。
+
+    实现用的是 expat 的**流式**解析（``ParserCreate`` + ``Parse``），不是
+    ``ElementTree.fromstring``：8 MB 的主部件建成树要几十倍内存，而这里
+    只需要「良构 / 不良构」一个比特。**同时把 ``EntityDeclHandler`` 设成抛异常** ——
+    良构的 OOXML 主部件里不会有任何实体声明，于是 billion laughs 与
+    XXE（``<!ENTITY x SYSTEM "file:///...">``）在第一行就被拒掉，不会展开。
+    （实测：两种攻击样本都在 0.001 秒内被拒，5.6 MB 的正常文档 0.03 秒通过。）
+    """
+    entry = _OOXML_PARTS.get(kind, (None, None))[0]
+    if entry is None:
+        # 纯文本：没有 XML 主部件可判
+        return False
+
+    if not looks_like_ooxml(path):
+        # 同一个 kind 既可能是 OOXML（.docx）也可能是旧版 OLE2（.doc），
+        # 光看 kind 分不出来。**必须先确认它是 zip** —— 否则一个正常的
+        # .doc 会因为「zip 打不开」被误判成损坏（这条是被一次探测抓出来的：
+        # 探一个只有 OLE2 头的 .doc，本函数一度返回 True）。
+        # 旧格式仍然只能靠退出码，如实写在文档里，不假装覆盖到了。
+        return False
+
+    try:
+        with zipfile.ZipFile(path) as archive:
+            if entry not in set(archive.namelist()):
+                return True
+            with archive.open(entry) as handle:
+                payload = handle.read(_OOXML_PART_LIMIT)
+    except (KeyError, OSError, zipfile.BadZipFile):
+        return True
+
+    return not _is_well_formed_xml(payload)
+
+
+def _is_well_formed_xml(payload: bytes) -> bool:
+    """这段字节是不是一段良构的 XML。流式判，不建树，不接受任何实体声明。"""
+
+    class _EntityDeclared(Exception):
+        """良构的 OOXML 主部件里不该出现实体声明 —— 出现即当作不良构。"""
+
+    parser = expat.ParserCreate()
+
+    def _reject_entity(*_args: object) -> None:
+        raise _EntityDeclared
+
+    parsed_ok = True
+    parser.EntityDeclHandler = _reject_entity
+    try:
+        parser.Parse(payload, True)
+    except _EntityDeclared:
+        parsed_ok = False
+    except expat.ExpatError:
+        parsed_ok = False
+    return parsed_ok
 
 
 def allowed_extensions() -> set[str]:

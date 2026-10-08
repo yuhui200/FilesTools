@@ -13,6 +13,19 @@ node_modules/
 # 不进版本库，克隆后要跑一次构建。
 frontend/dist/
 
+# 桌面端的构建产物。dist-desktop/ 是 `npm run build:desktop` 的产出，
+# 由 Tauri 内嵌进 FileTools.exe；target/ 是 Rust 的编译缓存；
+# gen/ 是 tauri-build 生成的权限 schema；artifacts/ 放最终的安装包
+# （scripts/build_windows.py 把 FileTools_<版本>_x64-setup.exe 复制成
+# FileTools-Setup-x64.exe 放在那里）。
+#
+# 这四条刻意写在**这一个** .gitignore 里，而不是再建 desktop/.gitignore 与
+# desktop/src-tauri/.gitignore —— 全仓库一份忽略规则，和 frontend/dist/ 同处。
+frontend/dist-desktop/
+desktop/src-tauri/target/
+desktop/src-tauri/gen/
+desktop/artifacts/
+
 # 环境变量
 .env
 .env.*

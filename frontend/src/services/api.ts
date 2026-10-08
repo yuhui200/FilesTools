@@ -32,6 +32,8 @@ import type {
   TxtOrientation,
 } from '@/types'
 
+import { isDesktop, saveResultToDownloads } from './desktop'
+
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/$/, '')
 
 /** 带后端错误码的异常 */
@@ -274,12 +276,29 @@ export function resizeImages({
 }
 
 /**
+ * 一次下载的去向。
+ *
+ * 界面上「已取走」的判定两个平台一样（都算下载成功），但桌面端多一件事要做：
+ * 把落盘路径显示出来，并给「打开 / 在文件夹中显示」两个动作当入参。
+ */
+export type DownloadOutcome =
+  | { kind: 'browser' }
+  | { kind: 'desktop'; path: string }
+
+/**
  * 下载结果文件。
  *
- * 先取回 blob 再触发下载，好处是：可以拿到真实文件名、能捕获失败并提示，
+ * Web 上先取回 blob 再触发下载，好处是：可以拿到真实文件名、能捕获失败并提示，
  * 也不会因为浏览器直接打开链接而在新标签页里预览图片。
+ *
+ * 桌面端（Tauri）走另一条路：WebView2 里 `<a download>` + `createObjectURL`
+ * 是**静默 no-op**，点了没反应也不报错。所以那里把字节交给 Rust 直接写进
+ * 「下载」目录，并把落盘路径返回给界面。见 `services/desktop.ts`。
  */
-export async function downloadResult(path: string, filename: string): Promise<void> {
+export async function downloadResult(
+  path: string,
+  filename: string,
+): Promise<DownloadOutcome> {
   let response: Response
   try {
     response = await fetch(`${API_BASE}${path}`)
@@ -292,6 +311,23 @@ export async function downloadResult(path: string, filename: string): Promise<vo
   }
 
   const blob = await response.blob()
+
+  if (isDesktop) {
+    try {
+      const savedPath = await saveResultToDownloads(
+        new Uint8Array(await blob.arrayBuffer()),
+        filename,
+      )
+      return { kind: 'desktop', path: savedPath }
+    } catch (caught) {
+      // Rust 侧的 `Err` 里是给用户看的中文，别让它被通用文案吃掉
+      const message =
+        caught instanceof Error && caught.message ? caught.message : '保存失败，请重试'
+      throw new ApiError(message, 'download_failed', 0)
+    }
+  }
+
+  // ---- 以下是 Web 的原有路径，一行未改 ----
   const objectUrl = URL.createObjectURL(blob)
 
   try {
@@ -306,6 +342,8 @@ export async function downloadResult(path: string, filename: string): Promise<vo
     // 交给浏览器读完再释放
     window.setTimeout(() => URL.revokeObjectURL(objectUrl), 10_000)
   }
+
+  return { kind: 'browser' }
 }
 
 // ----------------------------------------------------------------------

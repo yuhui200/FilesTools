@@ -6,12 +6,9 @@ export function Footer() {
       <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
         <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <div className="flex items-center gap-2.5">
-              <span className="grid h-7 w-7 place-items-center rounded-lg bg-brand-600 text-xs font-bold text-white">
-                F
-              </span>
-              <span className="font-semibold text-slate-900">FileTools</span>
-            </div>
+            {/* 与页头同一个锁排，只是小一号 —— 页脚和页头用两套画法，
+                用户一眼就能看出「这不是同一个产品」。 */}
+            <img src="/filetools-logo.svg" alt="FileTools" className="h-7 w-auto" />
             <p className="mt-2 max-w-md text-sm text-slate-500">
               简单、快速的在线文件工具。转换、压缩、调整图片和处理 PDF。
             </p>

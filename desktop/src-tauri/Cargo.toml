@@ -1,0 +1,40 @@
+# FileTools 桌面端（Windows）的 Rust 侧。
+#
+# 这里**只有外壳**：开一个 WebView2 窗口、加载 frontend/ 构建出来的界面。
+# 转换引擎（PDF / 图片 / Office / OCR / 压缩）一个字节都不在这里，
+# 也不会有 —— 桌面端和后端是同一个「一个 Backend、多个客户端」的关系，
+# 见 README 的「各阶段刻意没有引入的东西」。
+#
+# 依赖只有 Tauri 自己那一串 + serde。**刻意不加** tauri-plugin-opener：
+# §五 的「打开结果 / 在文件夹中显示」用 std::process::Command 调 explorer.exe
+# 就能做到，为两个 API 拉一个插件不合算。
+
+[package]
+name = "filetools"
+# 这个值由 scripts/sync_version.py 从仓库根的 VERSION 写入，
+# scripts/verify_branding.py §八 会断言它与 VERSION 相等。
+# **不要手改** —— 它是版本真相源的第 N 个落点，不是第二份真相。
+version = "0.1.0"
+description = "FileTools 桌面端（Windows）"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+# Tauri 2 的惯例：逻辑放 lib，main.rs 只是个薄入口。
+# 这样 Windows / macOS / Linux 三端共用一份 run()。
+name = "filetools_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

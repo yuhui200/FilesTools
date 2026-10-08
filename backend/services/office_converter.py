@@ -38,7 +38,7 @@ import threading
 from pathlib import Path
 
 from config import settings
-from office.loader import decode_text
+from office.loader import decode_text, detect_kind, ooxml_main_part_is_broken
 from office.txt_to_pdf import TxtOptions, build_pdf_from_text
 from pdf.loader import open_pdf
 from utils.errors import (
@@ -277,6 +277,58 @@ def _verify_output(path: Path) -> int:
     return pages
 
 
+#: soffice 读不了源文件时打在 stderr 上的那句话。**只用来归类，绝不外传**
+#: （stderr 进日志，响应里只有统一文案，见 §十三）。
+#:
+#: ⚠️ 这条是**补充**信号，不是主判据：它是 LibreOffice 的英文原样输出，
+#: 换一个本地化版本有可能变成别的语言。主判据是
+#: :func:`office.loader.ooxml_main_part_is_broken` —— 那一条判的是源文件
+#: 自己的结构，与平台、与 LibreOffice 版本、与语言都无关。
+_UNLOADABLE_STDERR_MARKERS = (
+    "source file could not be loaded",
+    "error: source file could not be loaded",
+)
+
+
+def _source_could_not_be_loaded(
+    source: Path, proc: subprocess.CompletedProcess[str]
+) -> bool:
+    """三个信号合起来判断：这次失败是「源文件读不了」还是「转换过程失败」。
+
+    这两个归类的用户动作完全不同 —— 前者该重新拿一份文件（重传多少次都一样），
+    后者可以重试。所以判错了等于给了用户一条错的路。
+
+    **不能只看 soffice 的退出码。** 同一个损坏的 .docx，本机（Windows）上
+    soffice 退出码是 1，而 Linux 上实测是 **0** —— 只押退出码会让 CI 上那条
+    「损坏文件要报 400」的断言收到 422。下面是三条并列的信号，任一成立即
+    判定为「读不了」：
+
+    1. **进程结果**：退出码非 0；
+    2. **输入校验**：OOXML 主部件在不在、是不是良构的 XML —— 这一条与平台无关，
+       正是它补上了第 1 条在不同平台上不一致的那条缝；
+    3. **进程输出**：stderr 里那句「could not be loaded」（补充信号，见上）。
+
+    三条都只在**没有任何产物**时才被问到；有产物就走 :func:`_verify_output`
+    那条路（产物打不开同样是 :class:`CorruptedFileError`）。所以一个能转出
+    可用 PDF 的文件永远不会被这三条误伤。
+    """
+    if proc.returncode != 0:
+        return True
+
+    stderr = (proc.stderr or "").lower()
+    if any(marker in stderr for marker in _UNLOADABLE_STDERR_MARKERS):
+        return True
+
+    # 传整个文件名：detect_kind 取的是 ``Path(名字).suffix``，
+    # 只传 ``".docx"`` 会被当成没有扩展名的隐藏文件。
+    kind = detect_kind(source.name)
+    if kind is not None and ooxml_main_part_is_broken(source, kind):
+        logger.info("源文件的主部件不是良构 XML，判为损坏（kind=%s）", kind)
+        return True
+
+    return False
+
+
 def _convert_with_libreoffice(source: Path, work_dir: Path) -> tuple[Path, int]:
     """把一份 Office 文档转成 PDF，返回 (产物路径, 页数)。
 
@@ -329,8 +381,7 @@ def _convert_with_libreoffice(source: Path, work_dir: Path) -> tuple[Path, int]:
             break
 
         if output is None:
-            # 退出码非 0 基本都是读不了源文件（损坏 / 加密 / 伪装成 Office 格式）
-            if proc.returncode != 0:
+            if _source_could_not_be_loaded(source, proc):
                 raise CorruptedFileError(
                     "无法读取该 Office 文件，请检查文件是否损坏。"
                 )

@@ -6,6 +6,40 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+
+
+#: 版本号的**唯一真相源**：仓库根的 ``VERSION``（一行文本）。
+#:
+#: 四个平台都从这里取版本：后端在 import 期读它；前端与移动端读不了 Python，
+#: 由 ``scripts/sync_version.py`` 把值写进它们的 ``package.json`` / ``app.json``；
+#: 桌面端则由 Tauri 读 ``frontend/package.json``。``scripts/verify_branding.py``
+#: 断言这些落点**逐一等于** ``VERSION``，漂移当场变红。
+_VERSION_FILE = Path(__file__).resolve().parent.parent / "VERSION"
+
+
+def _read_version() -> str:
+    """读出版本号；**读不到就抛异常，绝不兜底**。
+
+    兜底成 ``"0.1.0"`` 这类常量看着稳妥，实际会把「VERSION 没跟着一起部署」
+    变成「接口安静地报了一个陈旧但看起来完全正常的版本号」—— 那正是本项目
+    一路在防的「第二份真相」，而且它只会在很久以后以「桌面端和网页显示的
+    版本不一样」的形式暴露出来。读不到就当场炸，问题在启动那一刻就可见。
+
+    ⚠️ :file:`Dockerfile` 只 ``COPY backend/``，所以镜像里必须额外有一行
+    ``COPY VERSION /app/VERSION``（WORKDIR 是 ``/app``，正好是这里的
+    ``parent.parent``）。``scripts/verify_branding.py`` 会断言那一行存在。
+    """
+    try:
+        value = _VERSION_FILE.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError(
+            f"读不到版本文件 {_VERSION_FILE}（{exc}）。它在仓库根，"
+            "必须与 backend/ 一起部署：Docker 镜像里需要 COPY VERSION /app/VERSION。"
+        ) from exc
+    if not value:
+        raise RuntimeError(f"版本文件 {_VERSION_FILE} 是空的")
+    return value
 
 
 def _int_env(name: str, default: int) -> int:
@@ -55,7 +89,10 @@ class Settings:
     """运行期配置。"""
 
     APP_NAME: str = "FileTools API"
-    APP_VERSION: str = "0.1.0"
+
+    # 版本号来自仓库根的 VERSION 文件（见 ``_read_version``）。
+    # 这里**故意不写常量** —— 写死就是第七份需要手改的副本。
+    APP_VERSION: str = _read_version()
 
     # ------------------------------------------------------------------
     # 上传限制
@@ -263,11 +300,23 @@ class Settings:
     # ------------------------------------------------------------------
     # CORS：允许访问后端的前端地址
     # ------------------------------------------------------------------
+    # 桌面端（Tauri）也在白名单里。Tauri 2 在 **Windows** 上的 webview 不是
+    # 文件协议，而是一个自定义协议，页面的 Origin 是 ``http://tauri.localhost`` ——
+    # 不加这一条，桌面端每一次 /api 调用都会被浏览器当成跨域拦掉，
+    # 表现为「界面画出来了，但什么都转不了」。
+    #
+    # 只加 Windows 这一个 forms：macOS / Linux 上 Tauri 用的是
+    # ``tauri://localhost``，而本项目**没有** macOS / Linux 的桌面客户端
+    # （只出 x64 Windows 安装包），加进去就是一条永远不会被用到的死配置。
+    # 真要做那两个平台，这里再补一条。
+    #
+    # 这是**默认值**：部署时可用 FILETOOLS_CORS_ORIGINS 整份覆盖。
     CORS_ORIGINS: list[str] = _list_env(
         "FILETOOLS_CORS_ORIGINS",
         [
             "http://localhost:5173",
             "http://127.0.0.1:5173",
+            "http://tauri.localhost",
         ],
     )
 

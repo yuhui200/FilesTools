@@ -28,6 +28,12 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 
 COPY backend/ backend/
 
+# 版本号的唯一真相源在仓库根。backend/config.py 是**运行期读它**的，
+# 而不是写一个兜底常量 —— 兜底会让「VERSION 没进镜像」变成容器安静地报一个
+# 陈旧版本号。这一行不能删：删了 backend 一 import 就抛 RuntimeError。
+# 放在 pip 安装之后，是为了版本号变动不会让依赖层缓存失效。
+COPY VERSION /app/VERSION
+
 # 前端必须在宿主机先跑过 `npm run build`（镜像里不装 Node）。
 # 若没有 frontend/dist，这一行会直接构建失败 —— 这是故意的，
 # 总比构建成功、跑起来却是 404 好查。

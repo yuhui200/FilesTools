@@ -8,6 +8,8 @@ interface ConversionTaskListProps {
   downloading: boolean
   /** 正在重试的任务号 */
   retrying: string | null
+  /** 桌面端各单项落盘后的绝对路径，键是任务号；Web 上恒为空对象 */
+  savedItemPaths: Readonly<Record<string, string>>
   onRetry: (taskId: string) => void
   onDownload: (taskId: string, url: string, filename: string) => void
 }
@@ -23,6 +25,7 @@ export function ConversionTaskList({
   takenItems,
   downloading,
   retrying,
+  savedItemPaths,
   onRetry,
   onDownload,
 }: ConversionTaskListProps) {
@@ -58,6 +61,7 @@ export function ConversionTaskList({
             taken={takenItems.has(task.task_id)}
             downloading={downloading}
             retrying={retrying === task.task_id}
+            savedPath={savedItemPaths[task.task_id] ?? null}
             onRetry={onRetry}
             onDownload={onDownload}
           />

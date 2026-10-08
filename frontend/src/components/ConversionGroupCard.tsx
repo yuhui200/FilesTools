@@ -16,6 +16,7 @@ import { explainError } from '@/utils/errorMessages'
 import { ConversionOptions } from './ConversionOptions'
 import { ConversionTargetSelector } from './ConversionTargetSelector'
 import { ConversionTaskList } from './ConversionTaskList'
+import { DesktopSavedFile } from './DesktopSavedFile'
 
 interface ConversionGroupCardProps {
   group: ConversionGroupState
@@ -27,6 +28,10 @@ interface ConversionGroupCardProps {
   maxBytes: number
   takenItems: ReadonlySet<string>
   downloading: boolean
+  /** 这一组各单项在桌面端落盘后的绝对路径，键是任务号；Web 上恒为空对象 */
+  savedItemPaths: Readonly<Record<string, string>>
+  /** 这一组整批结果在桌面端落盘后的绝对路径；Web 上恒为 null */
+  savedGroupPath: string | null
   onChangeTarget: (groupId: string, target: string) => void
   onChangeOption: (groupId: string, key: string, value: OptionValue) => void
   onChangeSize: (groupId: string, changes: Partial<SizeOptions>) => void
@@ -54,6 +59,8 @@ export function ConversionGroupCard({
   maxBytes,
   takenItems,
   downloading,
+  savedItemPaths,
+  savedGroupPath,
   onChangeTarget,
   onChangeOption,
   onChangeSize,
@@ -250,6 +257,7 @@ export function ConversionGroupCard({
               takenItems={takenItems}
               downloading={downloading}
               retrying={group.retrying}
+              savedItemPaths={savedItemPaths}
               onRetry={(taskId) => onRetry(group.id, taskId)}
               onDownload={onDownloadItem}
             />
@@ -274,6 +282,11 @@ export function ConversionGroupCard({
                   {result.cancelled > 0 && ` · 已取消 ${result.cancelled} 个`}
                 </span>
               </div>
+            )}
+
+            {/* 桌面端整批落盘之后的位置与后续动作（Web 上不渲染） */}
+            {settled && savedGroupPath && (
+              <DesktopSavedFile path={savedGroupPath} />
             )}
 
             {settled && capabilityNote && (

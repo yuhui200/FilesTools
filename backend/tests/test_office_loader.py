@@ -27,6 +27,7 @@ from office.loader import (
     detect_kind,
     looks_like_ole2,
     looks_like_ooxml,
+    ooxml_main_part_is_broken,
     validate_office_upload,
 )
 from tests.conftest import (
@@ -421,6 +422,118 @@ def test_slide_count_returns_none_for_a_broken_zip(tmp_path: Path) -> None:
 # ----------------------------------------------------------------------
 # 校验结果的登记信息
 # ----------------------------------------------------------------------
+
+# ----------------------------------------------------------------------
+# 主部件的良构性（§三：损坏文件的归类不能只押 soffice 退出码）
+#
+# 上传校验只看「包结构属不属于所声称的类型」，不看主部件里的 XML 良不良构 ——
+# 恰好这一条是**与平台无关**的判据，用来补上 soffice 退出码在不同平台上
+# 不一致的那条缝（Windows 给 1、Linux 给 0）。
+# ----------------------------------------------------------------------
+
+def _ooxml(tmp_path: Path, name: str, main_part: str) -> Path:
+    """一份容器完整、只有主部件内容可指定的 .docx。"""
+    parts = {
+        "[Content_Types].xml": (
+            '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org'
+            '/package/2006/content-types"><Override PartName="/word/document.xml" '
+            'ContentType="application/vnd.openxmlformats-officedocument.'
+            'wordprocessingml.document.main+xml"/></Types>'
+        ),
+        "word/document.xml": main_part,
+    }
+    return write(tmp_path, name, zip_bytes(parts))
+
+
+def test_a_sound_main_part_is_not_reported_as_broken(tmp_path: Path) -> None:
+    source = _ooxml(
+        tmp_path,
+        "ok.docx",
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body><w:p/></w:body></w:document>",
+    )
+
+    assert ooxml_main_part_is_broken(source, "word") is False
+
+
+def test_a_real_docx_fixture_is_not_reported_as_broken(tmp_path: Path) -> None:
+    """在**真的** sample 上也要成立 —— 免得这条判据只对合成样张友好。"""
+    source = write(tmp_path, "sample.docx", build_docx_bytes())
+
+    assert ooxml_main_part_is_broken(source, "word") is False
+
+
+def test_malformed_main_part_is_reported_as_broken(tmp_path: Path) -> None:
+    source = _ooxml(tmp_path, "broken.docx", "<w:document>没有闭合的标签 <<<")
+
+    assert ooxml_main_part_is_broken(source, "word") is True
+
+
+def test_a_zip_without_the_main_part_is_reported_as_broken(tmp_path: Path) -> None:
+    source = write(tmp_path, "nopart.docx", zip_bytes({"whatever.txt": "hi"}))
+
+    assert ooxml_main_part_is_broken(source, "word") is True
+
+
+def test_a_truncated_zip_is_reported_as_broken(tmp_path: Path) -> None:
+    full = build_docx_bytes()
+    source = write(tmp_path, "cut.docx", full[: len(full) // 2])
+
+    assert ooxml_main_part_is_broken(source, "word") is True
+
+
+def test_a_legacy_ole2_document_is_never_judged_by_this_check(tmp_path: Path) -> None:
+    """**这条是一次探测抓出来的真缺陷。**
+
+    同一个 ``kind`` 既可能是 OOXML（.docx）也可能是旧版 OLE2（.doc），
+    光看 kind 分不出来。第一版的实现没先确认「它是不是 zip」，于是把一个
+    结构完全正常的 .doc 判成了「主部件损坏」—— 因为它本来就不是 zip。
+    旧格式没有 XML 可判，只能返回 False，把这一格让给退出码。
+    """
+    legacy = write(tmp_path, "old.doc", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 2048)
+
+    assert ooxml_main_part_is_broken(legacy, "word") is False
+
+
+def test_a_text_file_is_never_judged_by_this_check(tmp_path: Path) -> None:
+    source = write(tmp_path, "notes.txt", "纯文本，没有主部件".encode())
+
+    assert ooxml_main_part_is_broken(source, "text") is False
+
+
+def test_an_entity_declaration_makes_the_part_broken(tmp_path: Path) -> None:
+    """billion laughs：**不展开**，直接判不良构。
+
+    良构的 OOXML 主部件里不会有实体声明，所以这一条既堵了攻击面，
+    也不会误伤正常文档。断言只判 True，不去断言「有没有 OOM」——
+    那种断言在真炸了的时候是跑不到的。
+    """
+    bomb = (
+        '<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol">'
+        + "".join(
+            f'<!ENTITY lol{i} "' + f"&lol{i - 1};" * 10 + '">' for i in range(1, 10)
+        )
+        + ']><w:document xmlns:w="http://x">&lol9;</w:document>'
+    )
+    source = _ooxml(tmp_path, "bomb.docx", bomb)
+
+    assert ooxml_main_part_is_broken(source, "word") is True
+
+
+def test_an_external_entity_makes_the_part_broken(tmp_path: Path) -> None:
+    """XXE：``<!ENTITY x SYSTEM "file:///...">`` 同样在第一行就被拒。
+
+    这条**不只是**判不良构 —— 它同时保证解析器根本没有机会去读那个本地文件。
+    """
+    xxe = (
+        '<?xml version="1.0"?><!DOCTYPE r ['
+        '<!ENTITY x SYSTEM "file:///C:/Windows/win.ini">]>'
+        '<w:document xmlns:w="http://x">&x;</w:document>'
+    )
+    source = _ooxml(tmp_path, "xxe.docx", xxe)
+
+    assert ooxml_main_part_is_broken(source, "word") is True
+
 
 def test_filename_is_stripped_of_directories(tmp_path: Path) -> None:
     """上传文件名里带路径时要只留文件名（防路径穿越，§十八）。"""

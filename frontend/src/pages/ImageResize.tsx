@@ -280,6 +280,7 @@ export function ImageResize() {
             onReset={task.reset}
             downloading={task.downloading}
             downloadError={task.downloadError}
+            savedPath={task.savedPath}
           />
         )}
 

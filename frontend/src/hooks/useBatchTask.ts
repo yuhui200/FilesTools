@@ -50,6 +50,12 @@ export interface BatchTask {
   errorCode: string | null
   downloading: boolean
   downloadError: string | null
+  /**
+   * 桌面端落盘后的绝对路径，供结果卡渲染「已保存到 … / 打开 / 在文件夹中显示」。
+   *
+   * Web 上恒为 `null`（下载交给浏览器，我们不知道也管不着它存到哪）。
+   */
+  savedPath: string | null
   /** 结果文件是否已被下载或过期（服务器上已删除） */
   resultExpired: boolean
   /** 目标大小解析结果（字节），null 表示不限制 */
@@ -136,6 +142,8 @@ export function useBatchTask(options: Options): BatchTask {
   const [errorCode, setErrorCode] = useState<string | null>(null)
   const [downloading, setDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState<string | null>(null)
+  // 桌面端落盘后的绝对路径；Web 上恒为 null（见 components/DesktopSavedFile.tsx）
+  const [savedPath, setSavedPath] = useState<string | null>(null)
 
   const [targetOption, setTargetOptionState] = useState<SizeOption>('none')
   const [customValue, setCustomValue] = useState('1')
@@ -179,6 +187,9 @@ export function useBatchTask(options: Options): BatchTask {
     setResult(null)
     setErrorCode(null)
     setDownloadError(null)
+    // 结果没了，落盘路径也得跟着没 —— 否则界面会挂着一句
+    // 「已保存到 …」指向上一轮的文件
+    setSavedPath(null)
     setUploadPercent(0)
     statusUrlRef.current = null
   }, [])
@@ -247,6 +258,7 @@ export function useBatchTask(options: Options): BatchTask {
     setDownloadError(null)
     setResult(null)
     setSnapshot(null)
+    setSavedPath(null)
     setUploadPercent(0)
     setStatus('uploading')
 
@@ -281,6 +293,7 @@ export function useBatchTask(options: Options): BatchTask {
 
         if (final.state === 'done' && final.result) {
           setResult(final.result)
+          setSavedPath(null)
           setStatus('done')
           return
         }
@@ -310,7 +323,9 @@ export function useBatchTask(options: Options): BatchTask {
       const filename = result.archived
         ? (result.archive_filename ?? 'filetools.zip')
         : (result.items[0]?.result.filename ?? 'result')
-      await downloadResult(result.download_url, filename)
+      const outcome = await downloadResult(result.download_url, filename)
+      // 桌面端是「落盘」，Web 是「交给浏览器」，两边都算取走了
+      setSavedPath(outcome.kind === 'desktop' ? outcome.path : null)
 
       // 结果文件是一次性的：下载完再查一次，页面就能如实显示「已取走」
       const statusUrl = statusUrlRef.current
@@ -343,6 +358,7 @@ export function useBatchTask(options: Options): BatchTask {
     errorCode,
     downloading,
     downloadError,
+    savedPath,
     resultExpired: snapshot?.result?.expired === true,
     targetBytes,
     targetError,

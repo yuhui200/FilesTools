@@ -1,0 +1,13 @@
+{
+  "name": "filetools-desktop",
+  "private": true,
+  "description": "FileTools 的 Windows 桌面外壳（Tauri 2）。界面复用 frontend/ 的 React 产物，转换引擎一个字节都不复制。",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

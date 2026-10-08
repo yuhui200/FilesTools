@@ -1,0 +1,26 @@
+{
+  "name": "FileTools",
+  "short_name": "FileTools",
+  "description": "FileTools —— 简单、快速的在线文件工具：图片压缩、格式转换、尺寸调整与 PDF 处理。文件处理完自动删除，不上传留存。",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

@@ -180,6 +180,7 @@ export function PdfEditPages() {
           onRestart={task.reset}
           downloading={task.downloading}
           downloadError={task.downloadError}
+          savedPath={task.savedPath}
         />
       )}
 

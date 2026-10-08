@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "FileTools 桌面端的默认能力集。只开 core 默认权限，不额外放行任何 fs / dialog / shell 插件 —— 保存结果走第 6 步自己注册的 save_result 命令（原始二进制 IPC），打开与定位文件走 explorer.exe，两者都不需要插件权限。",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

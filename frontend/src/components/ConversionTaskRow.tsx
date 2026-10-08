@@ -5,6 +5,8 @@ import { conversionStageLabel, conversionStatusLabel } from '@/utils/conversion'
 import { explainError } from '@/utils/errorMessages'
 import { formatBytes } from '@/utils/format'
 
+import { DesktopSavedFile } from './DesktopSavedFile'
+
 interface ConversionTaskRowProps {
   task: ConversionTaskStatus
   /** 结果已经被取走（一次性令牌，取过就没了） */
@@ -13,6 +15,8 @@ interface ConversionTaskRowProps {
   downloading: boolean
   /** 正在重试这一项 */
   retrying: boolean
+  /** 桌面端这一项落盘后的绝对路径；Web 上恒为 null */
+  savedPath: string | null
   onRetry: (taskId: string) => void
   onDownload: (taskId: string, url: string, filename: string) => void
 }
@@ -67,6 +71,7 @@ export function ConversionTaskRow({
   taken,
   downloading,
   retrying,
+  savedPath,
   onRetry,
   onDownload,
 }: ConversionTaskRowProps) {
@@ -229,6 +234,14 @@ export function ConversionTaskRow({
       )}
       {task.status === 'failed' && !task.can_retry && task.retry_count > 0 && (
         <span className="shrink-0 text-xs text-slate-400">已重试过</span>
+      )}
+
+      {/* 桌面端落盘之后的位置与后续动作。`basis-full` 让它独占一行 ——
+          这一行是 flex-wrap 的，路径很长，挤在按钮旁边会把它们压变形。 */}
+      {savedPath && (
+        <div className="w-full basis-full">
+          <DesktopSavedFile path={savedPath} />
+        </div>
       )}
     </li>
   )

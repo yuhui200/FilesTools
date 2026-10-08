@@ -60,6 +60,12 @@ export interface PdfInputTask {
   resultExpired: boolean
   downloading: boolean
   downloadError: string | null
+  /**
+   * 桌面端下载时落盘的绝对路径，供结果卡渲染「已保存到 … / 打开 / 在文件夹中显示」。
+   *
+   * Web 上恒为 `null`（下载交给浏览器，我们不知道也管不着它存到哪）。
+   */
+  savedPath: string | null
   selectFile: (file: File) => void
   /** 选多份（转图片页用） */
   selectFiles: (files: File[]) => void
@@ -106,6 +112,9 @@ export function usePdfInput(rules: UploadRules, options: PdfInputOptions = {}): 
   const [resultExpired, setResultExpired] = useState(false)
   const [downloading, setDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState<string | null>(null)
+  // 桌面端把结果落到本机之后，这里记下落盘路径给结果卡显示「已保存到 …」。
+  // Web 上恒为 null（下载交给浏览器，没有我们自己知道的路径）。
+  const [savedPath, setSavedPath] = useState<string | null>(null)
 
   const abortRef = useRef<AbortController | null>(null)
   // 任务号：下载之后重新查一次快照，如实反映「结果已被取走」
@@ -132,6 +141,9 @@ export function usePdfInput(rules: UploadRules, options: PdfInputOptions = {}): 
     setSnapshot(null)
     setResultExpired(false)
     setDownloadError(null)
+    // 结果没了，落盘路径也得跟着没 —— 否则界面会挂着一句
+    // 「已保存到 …」指向上一轮的文件
+    setSavedPath(null)
     statusUrlRef.current = null
   }, [])
 
@@ -249,6 +261,7 @@ export function usePdfInput(rules: UploadRules, options: PdfInputOptions = {}): 
         if (controller.signal.aborted) return
         setResult(response)
         setResultExpired(false)
+        setSavedPath(null)
         setStage('done')
         // 同步处理的 PDF 工具没有逐文件状态，按上传的文件记一笔（§12）
         recordHistory(
@@ -300,6 +313,7 @@ export function usePdfInput(rules: UploadRules, options: PdfInputOptions = {}): 
       setResult(null)
       setSnapshot(null)
       setResultExpired(false)
+      setSavedPath(null)
       setStage('working')
 
       try {
@@ -319,6 +333,7 @@ export function usePdfInput(rules: UploadRules, options: PdfInputOptions = {}): 
 
         if (final.state === 'done' && final.result) {
           setResult(final.result)
+          setSavedPath(null)
           setStage('done')
           return
         }
@@ -341,7 +356,9 @@ export function usePdfInput(rules: UploadRules, options: PdfInputOptions = {}): 
     setDownloading(true)
     setDownloadError(null)
     try {
-      await downloadResult(result.download_url, result.filename)
+      const outcome = await downloadResult(result.download_url, result.filename)
+      // 桌面端是「落盘」，Web 是「交给浏览器」，两边都算取走了
+      setSavedPath(outcome.kind === 'desktop' ? outcome.path : null)
       // 结果文件是一次性的：下载完就标记，页面不再留一个点不动的下载按钮
       setResultExpired(true)
 
@@ -396,6 +413,7 @@ export function usePdfInput(rules: UploadRules, options: PdfInputOptions = {}): 
     resultExpired,
     downloading,
     downloadError,
+    savedPath,
     selectFile,
     selectFiles,
     selectFirst: (files: File[]) => {

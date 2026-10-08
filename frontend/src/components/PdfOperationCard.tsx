@@ -3,6 +3,7 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import { Alert } from '@/components/Alert'
 import { Button } from '@/components/Button'
 import { OptionField } from '@/components/ConversionOptionField'
+import { DesktopSavedFile } from '@/components/DesktopSavedFile'
 import { Dropzone } from '@/components/Dropzone'
 import { IconDownload, IconFile, IconX } from '@/components/Icons'
 import { downloadResult, runPdfOperation } from '@/services/api'
@@ -49,6 +50,8 @@ export function PdfOperationCard({ entry, formats, maxBytes }: PdfOperationCardP
   const [result, setResult] = useState<PdfResultResponse | null>(null)
   const [downloading, setDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState<string | null>(null)
+  // 桌面端落盘后的绝对路径；Web 上恒为 null（见 components/DesktopSavedFile.tsx）
+  const [savedPath, setSavedPath] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   const busy = stage !== 'idle'
@@ -88,6 +91,7 @@ export function PdfOperationCard({ entry, formats, maxBytes }: PdfOperationCardP
     (picked: File[]) => {
       setError(null)
       setResult(null)
+      setSavedPath(null)
       setFiles(multiple ? picked : picked.slice(0, 1))
     },
     [multiple],
@@ -104,6 +108,7 @@ export function PdfOperationCard({ entry, formats, maxBytes }: PdfOperationCardP
     setError(null)
     setDownloadError(null)
     setResult(null)
+    setSavedPath(null)
     setStage('uploading')
 
     try {
@@ -133,7 +138,9 @@ export function PdfOperationCard({ entry, formats, maxBytes }: PdfOperationCardP
     setDownloading(true)
     setDownloadError(null)
     try {
-      await downloadResult(result.download_url, result.filename)
+      const outcome = await downloadResult(result.download_url, result.filename)
+      // 桌面端是「落盘」，Web 是「交给浏览器」；结果卡随即收起，位置先记下来
+      setSavedPath(outcome.kind === 'desktop' ? outcome.path : null)
       // 结果文件下载后立即从服务器删除，这里如实反映
       setResult(null)
       setFiles([])
@@ -305,6 +312,12 @@ export function PdfOperationCard({ entry, formats, maxBytes }: PdfOperationCardP
           </div>
         </div>
       )}
+
+      {/* 桌面端落盘之后的位置与后续动作。
+          这一块**必须放在结果卡外面**：上面那一段下载成功后就把 result 清掉了
+          （服务端的临时文件同一时刻也删了），挂在里面等于永远看不到。
+          Web 上这个组件不渲染 —— isDesktop 是构建期常量，整块会被摇掉。 */}
+      <DesktopSavedFile path={savedPath} />
     </div>
   )
 }

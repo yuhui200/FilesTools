@@ -155,6 +155,7 @@ export function ImageCompress() {
             onReset={task.reset}
             downloading={task.downloading}
             downloadError={task.downloadError}
+            savedPath={task.savedPath}
           />
         )}
 

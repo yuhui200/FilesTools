@@ -505,6 +505,7 @@ export function DocToPdf({ kind }: DocToPdfProps) {
           restartLabel="换一份文件"
           downloading={task.downloading}
           downloadError={task.downloadError}
+          savedPath={task.savedPath}
           expired={task.resultExpired}
         />
       )}
