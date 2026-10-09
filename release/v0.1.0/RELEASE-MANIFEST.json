@@ -1,9 +1,9 @@
 {
   "product": "FileTools",
   "version": "0.1.0",
-  "generated_at": "2026-10-08T17:00:30+08:00",
+  "generated_at": "2026-10-09T15:40:07+08:00",
   "git": {
-    "commit": "604f1440228faab3a543d273dfbd5f882b478c65",
+    "commit": "2e3bc304718e4d43ab10c0c60d4331cbe948ee37",
     "branch": "main",
     "dirty": true
   },
@@ -20,8 +20,8 @@
     {
       "platform": "windows",
       "file": "windows/FileTools-Setup-x64.exe",
-      "bytes": 3478510,
-      "sha256": "3edf54653224bb34bd81c14866438b8985d0aa5cf973166477c5ad45bbd4ebfd",
+      "bytes": 3478836,
+      "sha256": "50b3d5d4ba1cd91ef107485f1576e94af1b273b168e722a507a50d7f11fe78f1",
       "kind": "NSIS 安装包（currentUser，免 UAC）",
       "signed": "none",
       "detail": "NSIS 安装器，仅 x64；与 Tauri 原始输出 FileTools_0.1.0_x64-setup.exe 逐字节相同"
