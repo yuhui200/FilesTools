@@ -26,16 +26,70 @@
 import type { ApiErrorBody } from '@/types'
 
 /**
- * 后端基地址。
+ * **构建时**烤进产物的默认地址。
  *
  * ⚠️ `process.env.EXPO_PUBLIC_API_BASE_URL` 必须写成**完整的字面量成员表达式** ——
  * babel-preset-expo 是在编译期按这个名字做字符串替换的，拆成
  * `process.env[name]` 或先赋给变量再取，替换都不会发生，运行时拿到 undefined。
  */
-export const API_BASE_URL = (process.env.EXPO_PUBLIC_API_BASE_URL ?? '').replace(/\/+$/, '')
+const ENV_API_BASE_URL = (process.env.EXPO_PUBLIC_API_BASE_URL ?? '').replace(/\/+$/, '')
+
+/**
+ * **运行期**覆盖值。空串表示「没有覆盖，用构建时那个」。
+ *
+ * 为什么要有它：Android 上的后端地址没法只在构建时定死。发出去的 APK
+ * 装到谁的手机上，后端就在谁的那台机器上，地址只有他自己知道 ——
+ * 而这正是 0.1.0 那份发行说明写错的地方（它说「首次启动时填」，实际上
+ * 当时根本没有这个入口）。现在由 `state/ApiConfigProvider` 在启动时从
+ * 本地存储读出来写进来，用户在「我的」页改地址时也写这里。
+ *
+ * ⚠️ **不要在 `client.ts` 里 import 本地存储。** `scripts/verify_mobile_phase11a.py`
+ * 会用一份刻意最小的 tsconfig 把 `utils/errorMessages.ts`（它 import 本文件的
+ * `CLIENT_CODES`）编译成 CJS 交给 node 跑，产物里不能出现任何
+ * `require('@react-native-async-storage/…')` 之类的原生依赖。所以这里
+ * 只留一个纯内存的开关，读盘的事交给 Provider。
+ */
+let runtimeApiBaseUrl = ''
+
+/** 去掉首尾空白与结尾的斜杠。存储、输入框、环境变量三条路都走它，口径一致。 */
+export function normalizeApiBaseUrl(value: string): string {
+  return value.trim().replace(/\/+$/, '')
+}
+
+/** 设置运行期覆盖值；传 `null` / 空串表示恢复成构建时的默认值。 */
+export function setApiBaseUrlOverride(value: string | null | undefined): void {
+  runtimeApiBaseUrl = normalizeApiBaseUrl(value ?? '')
+}
+
+/** 当前生效的基地址：运行期覆盖优先，没覆盖就是构建时那个。 */
+export function getApiBaseUrl(): string {
+  return runtimeApiBaseUrl || ENV_API_BASE_URL
+}
 
 /** 有没有配置服务器地址。没配时界面要给出可操作的提示，而不是空列表 */
-export const isApiConfigured = API_BASE_URL.length > 0
+export function isApiConfigured(): boolean {
+  return getApiBaseUrl().length > 0
+}
+
+/**
+ * 校验用户填的地址。返回 `null` 表示能用，否则返回一句给人看的原因。
+ *
+ * 只拦**看得出来**的错（空、没有协议、协议不是 http/https、压根不是一个 URL）；
+ * 连不连得通是网络层的事，不在这里判 —— 把「填错」和「连不上」混成一句话，
+ * 用户就不知道该改哪个。
+ */
+export function apiBaseUrlProblem(value: string): string | null {
+  const candidate = normalizeApiBaseUrl(value)
+  if (!candidate) return '请填写服务器地址'
+  if (!/^https?:\/\//i.test(candidate)) return '地址要以 http:// 或 https:// 开头'
+  try {
+    const parsed = new URL(candidate)
+    if (!parsed.hostname) return '地址里没有主机名'
+  } catch {
+    return '这个地址看起来不完整，检查一下主机名和端口'
+  }
+  return null
+}
 
 /** Mobile 自己产生的错误码，与后端错误码共用一套命名 */
 export const CLIENT_CODES = {
@@ -47,6 +101,15 @@ export const CLIENT_CODES = {
   response: 'bad_response',
   /** 没有配置 EXPO_PUBLIC_API_BASE_URL */
   config: 'config_failed',
+  /**
+   * 地址是明文 HTTP，被 Android 的网络安全策略挡在 socket 之前。
+   *
+   * 单独一个码，是因为它在系统层面就和「连不上」不是一回事：地址是对的、
+   * 网络是通的、服务器也活着，**是这台设备上这个安装包不允许连它**。
+   * 混进「无法连接服务器」里，用户会去查网络、查后端，永远查不到。
+   * （0.1.0 那个 APK 上，每一个请求都落进这一支。）
+   */
+  cleartext: 'cleartext_blocked',
   /** 本地文件读写失败（下载 / 分享） */
   file: 'file_error',
 } as const
@@ -126,7 +189,7 @@ interface RequestOptions {
  * 只监听一个的话，页面卸载时停不掉一个正在超时等待的请求。
  */
 async function request(path: string, options: RequestOptions = {}): Promise<Response> {
-  if (!isApiConfigured) {
+  if (!isApiConfigured()) {
     throw new ApiError(
       '没有配置服务器地址（EXPO_PUBLIC_API_BASE_URL）',
       CLIENT_CODES.config,
@@ -146,8 +209,9 @@ async function request(path: string, options: RequestOptions = {}): Promise<Resp
       ? { Accept: 'application/json', 'Content-Type': 'application/json' }
       : { Accept: 'application/json' }
 
+  const baseUrl = getApiBaseUrl()
   try {
-    return await fetch(`${API_BASE_URL}${path}`, {
+    return await fetch(`${baseUrl}${path}`, {
       method,
       body,
       signal: controller.signal,
@@ -165,6 +229,16 @@ async function request(path: string, options: RequestOptions = {}): Promise<Resp
     if (signal?.aborted) throw caught
     if (controller.signal.aborted) {
       throw new ApiError('请求超时，请检查网络后重试', CLIENT_CODES.timeout)
+    }
+    // Android 的网络安全策略会在**开 socket 之前**拒掉明文 HTTP，异常原文里
+    // 带 `CLEARTEXT communication to … not permitted`。它长得和「连不上」
+    // 一模一样，但排查方向完全相反 —— 地址、网络、后端全都是好的。
+    // 这里认出来单列，别让它混进下面那句通用话术里。
+    if (/cleartext/i.test(String((caught as { message?: string })?.message ?? ''))) {
+      throw new ApiError(
+        '这个地址用的是明文 HTTP，当前安装包不允许连接它。请改用 https://，或按 README 用你服务器的地址重新打包。',
+        CLIENT_CODES.cleartext,
+      )
     }
     throw new ApiError('无法连接服务器，请检查网络连接后重试', CLIENT_CODES.network)
   } finally {
@@ -228,5 +302,5 @@ export async function postForm<T>(
 
 /** 拼一个绝对地址（下载、`expo-sharing` 之类需要完整 URL 的地方用） */
 export function apiUrl(path: string): string {
-  return `${API_BASE_URL}${path}`
+  return `${getApiBaseUrl()}${path}`
 }

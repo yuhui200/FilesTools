@@ -8,6 +8,7 @@
  *
  * 只在 App 启动时拉一次，之后按分类过滤在内存里做（几十条数据，
  * 每次切分类都回服务器只会更慢、更容易失败）。下拉刷新可以手动重拉。
+ * **改服务器地址会重拉一次** —— 换了台服务器，能力表就是另一份了。
  */
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
@@ -15,6 +16,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { ApiError } from '@/services/api/client'
 import { fetchCapabilities } from '@/services/api/capabilities'
 import { fetchConfig, type ServerConfig } from '@/services/api/config'
+import { useApiConfig } from '@/state/ApiConfigProvider'
 import type { ConversionCapability, ConversionCapabilities, ConversionCategoryOption } from '@/types'
 
 /** 一个分类，以及归入它的工具 */
@@ -48,6 +50,7 @@ const CapabilitiesContext = createContext<CapabilitiesValue | null>(null)
 const CATEGORY_ORDER = ['image', 'document', 'pdf']
 
 export function CapabilitiesProvider({ children }: { children: React.ReactNode }) {
+  const { ready: addressReady, baseUrl } = useApiConfig()
   const [capabilities, setCapabilities] = useState<ConversionCapabilities | null>(null)
   const [config, setConfig] = useState<ServerConfig | null>(null)
   const [loading, setLoading] = useState(true)
@@ -76,10 +79,17 @@ export function CapabilitiesProvider({ children }: { children: React.ReactNode }
   }, [])
 
   useEffect(() => {
+    // 本地存的地址还没读出来之前**不发请求**。这时候发出去的是打包时烤死的
+    // 那个地址，改了地址的用户会先看到一轮注定失败的请求，能力表也可能
+    // 被旧服务器的响应盖住 —— 而 `loading` 本来就是 true，等这几十毫秒
+    // 不产生任何额外的等待感。
+    if (!addressReady) return
     const controller = new AbortController()
     void load(controller.signal)
     return () => controller.abort()
-  }, [load])
+    // baseUrl 进依赖：用户在「我的」页换了服务器就要换一份能力表，
+    // 否则列表里还是上一台服务器的工具。
+  }, [load, addressReady, baseUrl])
 
   const reload = useCallback(async (): Promise<void> => {
     await load()

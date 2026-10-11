@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""v0.1.0 正式发行：把**已经构建好的**产物收进 ``release/v0.1.0/``，并算出清单。
+"""发行打包：把**已经构建好的**产物收进 ``release/v<VERSION>/``，并算出清单。
+
+要打哪个版本不看这个文件 —— 看仓库根的 ``VERSION``。所以「0.1.1 另开一个目录、
+0.1.0 的历史产物原样留着」这件事不需要改一个字：本脚本只写 ``release/v<VERSION>/``，
+从不碰别的版本目录。
 
 这个脚本**不构建任何东西** —— 那是 ``build_windows.py`` / ``npm run build`` /
 ``gradlew assembleRelease`` 的事。它只做三件事：
@@ -32,6 +36,7 @@ import argparse
 import datetime as dt
 import hashlib
 import json
+import os
 import pathlib
 import shutil
 import subprocess
@@ -167,14 +172,23 @@ def collect(version: str, web_only: bool) -> tuple[list[dict], list[dict]]:
     else:
         target = release / "windows" / "FileTools-Setup-x64.exe"
         stage(WINDOWS_INSTALLER, target)
-        # 与构建目录里的原始输出对账：复制不能改动任何一个字节
-        bundle = pathlib.Path("D:/filetools-build/target/release/bundle/nsis")
-        originals = sorted(bundle.glob("*-setup.exe")) if bundle.is_dir() else []
+        # 与构建目录里的原始输出对账：复制不能改动任何一个字节。
+        #
+        # **按版本点名，不取 ``sorted(...)[0]``。** bundle 目录是一轮轮攒下来的：
+        # 打完 0.1.0、再打 0.1.1，那边就并排躺着两个安装器，而字典序最小的那个
+        # 永远是**最老的**。取 [0] 的后果不是报错，是每到 0.1.1 就下一句
+        # 「⚠️ 与 Tauri 原始输出不一致」—— 一句看起来像产物坏了的假警报。
+        bundle = pathlib.Path(
+            os.environ.get("FILETOOLS_CARGO_TARGET_DIR") or "D:/filetools-build/target"
+        ) / "release" / "bundle" / "nsis"
+        original = bundle / f"{PRODUCT}_{version}_x64-setup.exe"
         detail = "NSIS 安装器，仅 x64"
-        if originals:
-            detail += (f"；与 Tauri 原始输出 {originals[0].name} 逐字节相同"
-                       if sha256(originals[0]) == sha256(target)
-                       else "；⚠️ 与 Tauri 原始输出不一致")
+        if original.is_file():
+            detail += (f"；与 Tauri 原始输出 {original.name} 逐字节相同"
+                       if sha256(original) == sha256(target)
+                       else f"；⚠️ 与 Tauri 原始输出 {original.name} 不一致")
+        else:
+            detail += f"；构建目录里没有 {original.name}，这一步没法与原始输出对账"
         staged.append({
             "platform": "windows",
             "file": target.relative_to(release).as_posix(),
@@ -239,16 +253,24 @@ def write_manifest(version: str, staged: list[dict], missing: list[dict]) -> pat
 
 
 def write_sums(version: str, staged: list[dict]) -> pathlib.Path:
-    """写标准的 ``sha256sum -c`` 格式（路径相对发行目录）。"""
+    """写标准的 ``sha256sum -c`` 格式（路径相对发行目录）。
+
+    ``newline="\\n"`` 不是可有可无的：Windows 上 ``write_text`` 的默认换行是
+    ``os.linesep``，于是每一行末尾都带上 ``\\r``，而文件名就成了 ``'a.zip'\\r`` ——
+    GNU coreutils **不会**替你去掉那个 ``\\r``，``sha256sum -c`` 直接报
+    「No such file or directory」并以 1 退出。也就是说文档让用户跑的那条校验命令，
+    在 Windows 上生成的文件上**根本跑不通**（2026-10-11 实测：LF 那份 exit 0，
+    CRLF 那份 exit 1）。
+    """
     release = ROOT / "release" / f"v{version}"
     lines = [f"{item['sha256']}  {item['file']}" for item in staged]
     path = release / "SHA256SUMS.txt"
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     return path
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="收拢 v0.1.0 发行产物")
+    parser = argparse.ArgumentParser(description="收拢 v<VERSION> 的发行产物")
     parser.add_argument("--web-only", action="store_true",
                         help="只做 Web 那份（Windows/Android 产物还没好时）")
     args = parser.parse_args()

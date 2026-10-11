@@ -29,6 +29,14 @@ Dockerfile      text eol=lf
 *.yaml          text eol=lf
 *.toml          text eol=lf
 
+# SHA256SUMS.txt 尤其重要：它的每一行都是 `<哈希>  <文件名>`，而 GNU coreutils
+# **不会**替你去掉行尾的 \r —— 于是文件名变成 `'x.zip'\r`，`sha256sum -c` 对每个
+# 文件都报「No such file or directory」并以 1 退出。2026-10-11 实测：LF 那份 exit 0、
+# CRLF 那份 exit 1。索引里存的本来就是 LF，坏的是**在 Windows 上检出**出来的那一份
+# （core.autocrlf=true 会把 LF 转成 CRLF），所以这里必须显式锁死，
+# 不能只靠 `* text=auto` 的默认。
+SHA256SUMS.txt  text eol=lf
+
 # Windows 专用脚本反过来，必须 CRLF
 *.bat           text eol=crlf
 *.cmd           text eol=crlf

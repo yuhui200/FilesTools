@@ -2,7 +2,7 @@
   "expo": {
     "name": "FileTools",
     "slug": "filetools",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "filetools",
@@ -27,7 +27,8 @@
     },
     "plugins": [
       "expo-router",
-      "expo-sharing"
+      "expo-sharing",
+      "./plugins/withAndroidNetworkSecurity"
     ]
   }
 }

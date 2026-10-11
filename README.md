@@ -35,9 +35,45 @@
 —— 它是 **debug keystore 签名的**：能装、能用，**不能上架**，清单里如实写 `signed: "debug"`。
 iOS 与 Docker 这一轮**没有产物**（本机不是 macOS、没有 docker），照实写进清单的 `not_built`。
 
-> **这一步刻意停住了：没有打 tag、没有 push、没有建 GitHub Release。** 发行是三件事里
-> 唯一对外不可逆的一件，等仓库主人自己确认后再做。本轮交付的是**可发布的暂存树**，
-> 不是已经发出去的东西。
+**v0.1.1 发行打包（2026-10-11）**：修 0.1.0 的 **Android 发行事故**。0.1.0 那份 APK
+装得上、打得开、界面全对，但**一次转换也完不成**，而且装到设备上**没有任何办法把地址
+指到自己的后端**。0.1.1 改了两处（都只在 Android 客户端这一侧）：
+
+- **明文 HTTP 被系统挡掉** → 由 [`mobile/plugins/withAndroidNetworkSecurity.js`](mobile/plugins/withAndroidNetworkSecurity.js)
+  在 prebuild 时生成策略：release **默认拒明文**，只对 `10.0.2.2` / `127.0.0.1` / `localhost`
+  三个主机开白名单（**没有全局放开**）；debug 变体维持 Expo 模板原行为。
+- **地址烤死改不了** → 「我的 → 服务器」里可以直接改，构建期的值降级成**出厂默认值**。
+  ⚠️ 那个默认值 `http://127.0.0.1:8011` 是**构建机上的开发地址**；这一版**没有生产 HTTPS 地址**，
+  所以它把「填一个你自己的地址」做成了正经功能，而不是替你编一个地址。
+
+验收对象换成了**真安装包自己**（不是 Expo Go）：装 → 启动 → 连后端 → JPG→PNG →
+DOCX→PDF → 下载落盘 → 坏文件报错与重试 → 卸载，每一步留读数，结果拉回本机**按文件内容验**
+（PNG 的尺寸与像素、PDF 里抽得出源文件埋的 token）。逐项的读数、
+以及**这一轮抓出但没修**的非 ASCII 文件名缺陷，都写在
+[`release/v0.1.1/RELEASE-NOTES.md`](release/v0.1.1/RELEASE-NOTES.md)。
+
+这一轮跑长回归还**真点出来两个「下载按钮」缺陷**（0.1.0 就有，不是这次改出来的）：
+结果被一次性令牌取走之后，单项卡片上还留着一个点了就 404 的「下载」，只有一份结果的批次里
+「打包下载」也不消失（那种批次里两个地址本来就是**同一个令牌**，2026-10-11 直接打服务端量过）。
+两处都改成「听服务端的」，并各补了新断言钉死 —— **原有断言一条没删、没弱化**。
+另外修了发行元数据的一处「两层」缺陷：`SHA256SUMS.txt` 的每一行是 `<哈希>  <文件名>`，
+而 GNU coreutils **不会**替你去掉行尾的 `\r` —— 文件名就成了 `'x.zip'\r`，
+`sha256sum -c` 对每个文件都报「No such file or directory」并以 1 退出
+（实测 CRLF 那份 exit 1 / LF 那份 exit 0）。**两层都有问题，都修了**：
+生成端 `build_release.py` 没指定换行（已显式 `newline="\n"`）；
+检出端 `.gitattributes` 只有 `* text=auto` 而开发机开着 `core.autocrlf=true`，
+于是**索引里存的明明是 LF**、在 Windows 上检出却成了 CRLF（实测 `i/lf w/crlf`）——
+已补一条 `SHA256SUMS.txt text eol=lf`。`verify_release.py` 另加了一条**读原始字节**的断言
+钉死（原来用 `splitlines()` 读，`\r` 被吃掉，看不出这个问题）。
+
+**0.1.0 的历史产物一个字节都没动**，那份说错的发行说明也原地保留，
+发布时的原文逐字节留在 `release/v0.1.0/RELEASE-NOTES.as-published.md`。
+
+> **发行那一步由仓库主人自己做。** 打包这一轮刻意停在「可发布的暂存树」：
+> 不打 tag、不 push、不建 GitHub Release —— 发行是三件事里唯一对外不可逆的一件。
+> **后来主人自己做了**：远端已有 `v0.1.0` 这个 annotated tag（指向 `c57d456`）和
+> 一个标题为 `FilesTools 0.1.0` 的 GitHub Release（2026-10-09 发布，5 个资产）。
+> 那段「还没有发布」的记述到此为止，**下面这一轮（0.1.1）同样停在暂存树，等授权**。
 
 ---
 
@@ -870,6 +906,32 @@ npx expo start            # 然后按 w 开浏览器 / a 开 Android / i 开 iOS
 > 写成 `process.env[name]`、解构或先赋给变量，替换都不会发生，运行时拿到 `undefined`。
 > 改完要重启 dev server，热重载不会生效。
 
+#### 服务器地址在设备上也能改（0.1.1 起）
+
+`.env` 里那个地址只是**出厂默认值**。装了 App 的人可以在 **「我的 → 服务器 → 改地址」**
+里覆盖它，覆盖值存在设备本地、优先于出厂值，并且「我的」页会如实写明当前用的是哪一种。
+
+这不是锦上添花，是**必须**：`127.0.0.1` 在手机上指的是**手机自己**，后端却在用户自己的机器上。
+一份改不了地址的安装包，等于连不上任何一台真实服务器 —— 0.1.0 那份 APK 正是这么坏掉的
+（详见 [Android 明文 HTTP](#android-明文-http0-1-1-起)）。
+
+#### Android 明文 HTTP（0.1.1 起）
+
+**Android 对 `targetSdk` 28+ 的默认策略是拒绝明文 HTTP**，而本项目的后端只有明文 HTTP。
+允许哪些明文主机由 [`mobile/plugins/withAndroidNetworkSecurity.js`](mobile/plugins/withAndroidNetworkSecurity.js)
+在 `expo prebuild` 时写进清单（`mobile/android/` 是生成物且被 `.gitignore` 忽略，
+直接改那些文件不作数 —— 下一次 prebuild 就没了）：
+
+| 变体 | 策略 |
+| --- | --- |
+| release（`src/main`） | `base-config cleartextTrafficPermitted="false"`，只对白名单主机开明文：`localhost` / `127.0.0.1` / `10.0.2.2`（回环与模拟器宿主别名，对外部主机没有意义），加上**打包时**配置的 `http://` 地址里的主机，加上 `FILETOOLS_ANDROID_CLEARTEXT_HOSTS` 里点名的主机 |
+| debug / debugOptimized | `base-config cleartextTrafficPermitted="true"`，与 prebuild 模板原来的行为一致。**这份宽松只存在于 debug 变体** |
+
+**没有全局放开任意明文 HTTP**：release 的默认是「全拒」，白名单是显式的、构建时确定的，
+清单里能一条条数出来。运行时在 App 里改地址**绕不过这条系统策略** —— 换成一台不在白名单里
+的明文 HTTP 服务器，请求会被系统挡在 socket 之前，App 会明说「这个服务器地址不被允许」
+（而不是笼统的「无法连接服务器」，那会把用户支去查网络和后台，永远查不到）。
+
 ### 四个标签页与路由
 
 路由用 **expo-router**（文件即路由），`app/` 下的目录结构就是 URL 结构：
@@ -1250,7 +1312,7 @@ python scripts/generate_branding.py --check   # 只校验，不写
 | **Icon** | favicon.svg · favicon.ico(16/24/32/48) · 32 · 48 · 180 · 192 · 512 | icon.png(1024) · 5 档 mipmap(48/72/96/144/192) · adaptive icon | icon-1024.png（**无 alpha**） | icon.ico(16/24/32/48/64/128/256) · icon-256.png |
 | **图标来源** | ← 全部来自 `branding/source/filetools-icon.svg` | ← 同一份 | ← 同一份 | ← 同一份 |
 | **构建** | ✅ `npm run build` → `frontend/dist/`，由后端托管 | ✅ 配置与资产就位（未在 CI 里跑构建） | ❌ **未执行**（本机无 macOS） | ✅ **真的构建过**，产出 `FileTools.exe` + `FileTools-Setup-x64.exe` |
-| **实机** | ✅ 真实 Chromium / Edge / WebKit，2,074 项断言 | ⚠️ 封板验收 107/107 跑在 **Expo Web**（真实浏览器，375/390/414）；Android 原生路径有实测记录，但**没有一份独立的真机验收报告** | ❌ **一行实测都没有** | ✅ 安装 → 启动 → 卸载全流程真机核过 |
+| **实机** | ✅ 真实 Chromium / Edge / WebKit，2,074 项断言 | ⚠️ 封板验收 107/107 跑在 **Expo Web**（真实浏览器，375/390/414）；**0.1.1 起另有一份装在真安装包（非 Expo Go）上的 AVD 全链路验收**（装 → 启动 → 转换 → 下载 → 卸载），但**仍是模拟器，没有物理设备** | ❌ **一行实测都没有** | ✅ 安装 → 启动 → 卸载全流程真机核过 |
 
 **四张图标全部由同一个 SVG 生成**，`verify_branding.py` 会逐个量尺寸、查像素
 （Android 背景色要求**所有像素都等于 `#4f46e5`**、foreground 四角 alpha 为 0、
@@ -1272,11 +1334,11 @@ UI              PASS      PASS      CONFIG      PASS
 Build           PASS      PASS      N/A         PASS
 Real Device     PASS      VERIFY    N/A         PASS
 Branding        PASS      PASS      PASS        PASS
-Conversion      PASS      VERIFY    N/A         VERIFY
-Download        PASS      VERIFY    N/A         VERIFY
+Conversion      PASS      PASS      N/A         VERIFY
+Download        PASS      PASS      N/A         VERIFY
 Share           N/A       VERIFY    N/A         N/A
-Install         N/A       VERIFY    N/A         PASS
-Uninstall       N/A       VERIFY    N/A         PASS
+Install         N/A       PASS      N/A         PASS
+Uninstall       N/A       PASS      N/A         PASS
 ```
 
 **两处 `VERIFY` 是降级下来的，不是凑绿**：
@@ -1287,9 +1349,32 @@ Uninstall       N/A       VERIFY    N/A         PASS
   已实跑通过。**但「在真实桌面窗口里从头走完一次转换并点下载」没有证据** ——
   取证要开 WebView2 的远程调试端口再用 CDP 驱动，而那个端口本机开不出来（原因见
   「已知限制」第 27 条），所以不填 `PASS`。
-- **Android 的 Real Device / Conversion / Download / Share / Install / Uninstall** ——
-  原生路径在 AVD 上真跑通过，但**没有物理设备**上的独立验收。其中「Install」指的是
-  装上 Expo Go 之外的自家安装包，这一条没做过。
+
+**Android 那四行是 2026-10-11 升上来的，两行仍留在 `VERIFY`，都逐条说清依据**：
+
+- **Conversion / Download / Install / Uninstall 从 `VERIFY` 升到 `PASS`。**
+  依据不再是 Expo Go 那条路，而是**这一版的真安装包本身**：
+  `adb install` 装的是 `release/v0.1.1/android/FileTools-0.1.1-release.apk`
+  （sha256 `01202bf3…`），`versionName` 实测 `0.1.1`、`targetSdk` 36、`primaryCpuAbi` `x86_64`。
+  **「装过的那个」与「要发出去的那个」是同一个字节**：装完把设备上的 `base.apk`
+  拉回来算 sha256，与本地构建产物逐字相同（都是 `01202bf3…`，98,884,276 字节）。
+  JPG→PNG 的结果拉回本机是 **480×320 的真 PNG**、左上角像素与源图逐值相同；
+  DOCX→PDF 的结果里**抽得出源 docx 埋的 token** —— 真走了转换，不是「状态码 200 就算过」；
+  下载真的落了盘、拉回来的字节数与内容都对；卸载后 `pm list packages` 无命中、
+  私有数据目录与外置目录都被清掉。
+- **Real Device 仍是 `VERIFY`。** 上面那一切产自一台 **AVD**（`sdk_gphone64_x86_64`，
+  Android 15 / API 35 / x86_64），**不是物理设备** —— 模拟器与真机在 SAF 选择器、
+  权限、厂商 ROM 上都可能不一样。**没有物理设备就不写 `PASS`。**
+- **Share 仍是 `VERIFY`。** 这一轮没有单独在真安装包上验分享（0.1.0 那次的分享是在
+  Expo Go 里跑的，不能拿来顶替）。
+- 另外这一轮还抓出一条**非本轮引入**的缺陷：非 ASCII 文件名经 `expo/fetch` 上传后会变成
+  一串十六进制（**文件内容正确，只有名字是乱的**）。它没被算进上表的任何一格，
+  单独写在 [`release/v0.1.1/RELEASE-NOTES.md`](release/v0.1.1/RELEASE-NOTES.md) 的已知限制里。
+- 同一轮还抓出**两个「死下载按钮」**，这两个**当场修了**（也非本轮事故引入，0.1.0 就有）：
+  结果是**一次性令牌**，服务端取走后只把整批的 `download_url` 置空，单项那个字段原样留着，
+  而整包与单项在「只有一份结果」的批次里**本来就是同一个令牌**。前端原来只看单项字段、
+  下完也不重拉快照，于是留下两个点了就 404 的按钮。两处都改成听服务端的，长回归补了
+  断言钉死，并在真安装包上复验（验收第 6b / 6c 两步）。
 
 ### 当前支持平台
 
@@ -1310,8 +1395,8 @@ iOS configuration
 | 状态 | 含义 | 本项目的对应事实 |
 | --- | --- | --- |
 | **Implemented** | 代码写完了 | 四个平台客户端 + 全部工具（19 种格式 / 70 条转换 / 7 个 PDF 操作） |
-| **Built** | 真的产出过二进制或产物 | Web `frontend/dist/` · Windows `FileTools.exe` + `FileTools-Setup-x64.exe` · Android **真 APK**（`gradlew assembleRelease`，98,875,636 字节，含 4 个 ABI） |
-| **Verified** | 在真实环境跑过，且留下了读数 | Web 真实浏览器（2,074 项断言）· Windows 安装→启动→卸载全流程 · Android 原生路径（AVD，真 UI 驱动，转换/下载/分享都走通）· 后端 1,645 条 pytest |
+| **Built** | 真的产出过二进制或产物 | Web `frontend/dist/` · Windows `FileTools.exe` + `FileTools-Setup-x64.exe` · Android **真 APK**（`gradlew assembleRelease`：0.1.0 是 98,875,636 字节、0.1.1 是 98,884,276 字节，含 4 个 ABI） |
+| **Verified** | 在真实环境跑过，且留下了读数 | Web 真实浏览器（2,074 项断言）· Windows 安装→启动→卸载全流程 · Android **真安装包**在 AVD 上的全链路（装→启动→连后端→转换→下载落盘→卸载，结果按**文件内容**验）· 后端 1,645 条 pytest |
 | **Not verified** | 没有可靠证据 | **iOS 的任何运行时行为**（不是「大概没问题」，是没测过） |
 | **Environment limited** | 不是没做，是本机够不着 | iOS 构建（无 macOS）· Android 独立真机验收（无物理设备）· Windows ARM64（无对应 target）· `docker build`（本机无 docker） |
 
@@ -1321,9 +1406,14 @@ iOS configuration
   （**无 alpha 通道，像素已量过**）全部就位，TypeScript 0 错误，路由与代码一致。
   **但 `expo run:ios` 一次都没跑过。** 所以 iOS 是 **CONFIG**，不是 PASS。
 - **Android**：封板那 107/107 是在 **Expo Web**（真实浏览器，375/390/414 三档）上跑的；
-  另有 AVD `filetools11a`（Android 15 / x86_64）上的原生路径实测记录 —— 真实转换、
-  真实下载、真实分享都走通了，结果文件名也是对的。**但没有一份独立的物理设备验收**，
-  所以矩阵里是 ⚠️ / VERIFY，不是 ✅。
+  另有 AVD `filetools11a`（Android 15 / x86_64）上的原生路径实测记录。
+  **0.1.1 起又多了一份更硬的**：验收对象换成了**真安装包自己**（`adb install` 装的是
+  `release/v0.1.1/android/…apk`，不是 Expo Go 宿主），装 → 启动 → 连后端 → JPG→PNG →
+  DOCX→PDF → 下载落盘 → 坏文件报错与重试 → 卸载，全程留读数，结果拉回本机验的是
+  **文件内容**（PNG 的尺寸与像素、PDF 里抽出的 token）。
+  **但仍然没有一份物理设备验收** —— 全部产自模拟器，所以 `Real Device` 那格仍是
+  ⚠️ / `VERIFY`，不是 ✅。另外**非 ASCII 文件名**那条缺陷就是这一轮抓出来的，
+  它不在上表任何一格里，单列在 0.1.1 的已知限制中。
 
 #### 最终验收结论复核（2026-10-08）
 
@@ -1547,17 +1637,18 @@ FileTools/
 ├── branding/                       # ★ 四平台品牌真源与全部产物，见下方独立树
 │
 ├── release/                        # ★ 发行暂存树，由 scripts/build_release.py 写入
-│   └── v0.1.0/
+│   ├── v0.1.0/                     # 已发布的那一份：产物与校验和**一个字节都没动**
+│   └── v0.1.1/                     # 本轮（**尚未发布**，停在暂存树等授权）
 │       ├── RELEASE-NOTES.md        # 给下载者看的说明（文本，入库）
 │       ├── RELEASE-MANIFEST.json   # 产物清单的机器可读形态：字节数 / sha256 / 签名状态 / not_built
-│       ├── SHA256SUMS.txt          # sha256sum -c 格式
+│       ├── SHA256SUMS.txt          # sha256sum -c 格式（**LF 换行**；CRLF 会让这条命令直接失败）
 │       ├── web/ windows/ android/  # 各平台产物；**大二进制被 .gitignore 排除，不进版本库**
 │
 └── scripts/
     ├── verify_phase2.py … verify_phase10a.py   # 各阶段的真实浏览器 / 真机验收脚本
     ├── verify_phase9a_live.py                  # 后端真机验收（并发、指标、看门狗）
     ├── verify_phase10.py                       # ★ 第十阶段封板入口（210 项断言）
-    ├── verify_mobile_phase11a.py               # ★ 第十一阶段 A 封板入口（移动端 107 项断言）
+    ├── verify_mobile_phase11a.py               # ★ 第十一阶段 A 封板入口（移动端 110 项断言）
     ├── sync_version.py                         # ★ 把 VERSION 写进各消费方（幂等；--check 只校验）
     ├── generate_branding.py                    # ★ 从唯一真源生成四平台全部图标（--check 只校验）
     ├── verify_branding.py                      # ★ 品牌验收：真源、四平台图标、命名、版本、Docker
@@ -1565,7 +1656,8 @@ FileTools/
     ├── verify_desktop.py                       # ★ 桌面验收：六项检查，能构建就真的构建一次
     ├── verify_final.py                         # ★ 最终总验收入口：横切四个平台，环境够不着的写 NOT EXECUTED
     ├── build_release.py                        # ★ 收拢发行产物到 release/<版本>/，写清单与 sha256（zip 是确定性的）
-    ├── verify_release.py                       # ★ 发行验收：产物形态、三方哈希一致，环境够不着的写 NOT EXECUTED
+    ├── verify_release.py                       # ★ 发行验收：产物形态、三方哈希一致、SHA256SUMS 必须是 LF
+    ├── verify_android_release.py               # ★ Android 发行包验收：明文策略、地址可配置、文案边界
     ├── verify_markup_live.py / verify_text_live.py  # 标记语言 / 文本转换的真机验收
     ├── probe_ocr.py                            # 探测本机 OCR 组件是否可用
     ├── acceptance_final.py                     # 跨阶段总验收
@@ -2710,11 +2802,12 @@ CI 里**刻意不跑** `scripts/verify_phase*.py` —— 那一批要真实 Chro
 | `scripts/verify_phase9a_live.py` | 744 / 744 | 后端**真机**验收：真的提交任务、真的并发、真的看指标 |
 | `scripts/verify_phase10a.py` | 73 / 73 | 高级图片引擎的浏览器端 |
 | **`scripts/verify_phase10.py`** | **210 / 210** | **第十阶段封板入口**，11 个分段（A 24 / B 21 / C 13 / D 11 / E 14 / F 15 / G 15 / H 10 / I 12 / J 33 / G3 42） |
-| **`scripts/verify_mobile_phase11a.py`** | **107 / 107** | **第十一阶段 A 封板入口**，5 个分段（A 反漂移 25 / B 与真服务器对账 8 / C 三条真实链路 19 / D 界面行为 36 / E 任务生命周期：取消与重试 19） |
+| **`scripts/verify_mobile_phase11a.py`** | **110 / 110** | **第十一阶段 A 封板入口**，5 个分段（A 反漂移 25 / B 与真服务器对账 8 / C 三条真实链路 22 / D 界面行为 36 / E 任务生命周期：取消与重试 19）。C 段比封板时多的 3 条是 0.1.1 这一轮补的**下载按钮**断言（结果被一次性令牌取走后，单项与整包两个按钮都必须自己收起来）—— **原有断言一条没删、没弱化** |
 | **`scripts/verify_branding.py`** | **103 / 103** | 品牌验收：唯一真源、四平台图标尺寸与像素、App 名、版本一致性、`Dockerfile` 的 `COPY VERSION` |
-| **`scripts/verify_desktop.py`** | **48 / 48** | 桌面验收：Tauri 配置、标识符、版本、Windows 图标，**并真的跑了一次 Tauri 构建** |
+| **`scripts/verify_desktop.py`** | **48 / 48**（长回归里用 `--skip-build` 时是 **42 / 42**） | 桌面验收：Tauri 配置、标识符、版本、Windows 图标，**并真的跑了一次 Tauri 构建**。0.1.1 这一轮的长回归**刻意**带 `--skip-build`：Windows 构建**不可复现**（实测同一份源码三次构建出三个二进制），再构建一次会覆盖那个**已经真装机过**的安装器 —— 为测试动发行产物不值当。跳过时脚本会自己打印 `⚠️ 本次跳过了构建（--skip-build）：安装器是上一次跑出来的，不代表今天能构建`，**不静默变绿** |
 | **`scripts/verify_final.py`** | **98 / 98**（另 4 项 `NOT EXECUTED`） | **最终总验收入口**：版本 / 品牌 / 单一真源 / Web / 后端 / 移动 / 桌面 / 脚本齐备的横切检查。环境够不着的项（docker build、iOS 构建、Android 真机、ARM64）输出 `NOT EXECUTED` 并写明原因，**不写成 PASS** |
-| **`scripts/verify_release.py`** | **48 / 48**（另 4 项 `NOT EXECUTED`） | **发行验收**：`release/v0.1.0/` 每一份产物的形态（exe 真的是 PE/NSIS，APK 真的带签名块与 4 个 ABI）、**文件 · `SHA256SUMS.txt` · `RELEASE-MANIFEST.json` 三方哈希一致**、Web 的 zip 现场重打一次必须逐字节相同 |
+| **`scripts/verify_release.py`** | **52 / 52**（另 4 项 `NOT EXECUTED`） | **发行验收**：`release/v0.1.1/` 每一份产物的形态（exe 真的是 PE/NSIS，APK 真的带签名块与 4 个 ABI）、**文件 · `SHA256SUMS.txt` · `RELEASE-MANIFEST.json` 三方哈希一致**、Web 的 zip 现场重打一次必须逐字节相同、**`SHA256SUMS.txt` 必须是 LF**（`sha256sum -c` 在 CRLF 上会以 1 退出；这条断言读的是**原始字节**，因为 `splitlines()` 会把 `\r` 吃掉，看不出这个问题） |
+| **`scripts/verify_android_release.py`**（0.1.1 新增） | **45 / 45** | **Android 发行包验收**：配置插件生成的网络安全策略（release 默认拒明文 + 三个主机白名单、debug 全开）、地址可配置那一套（出厂默认值 / 本地持久化 / 恢复出厂）、`127.0.0.1` 不会被当成远程地址写进文档、文案表里「明文被系统挡掉」必须与「连不上服务器」分开 |
 | 桌面端安装包 **真机装一遍** | **通过** | 走完向导逐页核对 → 装 → 开 → 卸载，安装目录 / 两个快捷方式 / 注册表项全部清除 |
 
 跑法（以第十阶段为例）：

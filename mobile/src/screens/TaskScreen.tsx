@@ -92,6 +92,10 @@ export default function TaskScreen() {
           filename: result.filename,
         })
         setDownloaded((previous) => ({ ...previous, [task.task_id]: file }))
+        // 取走这一份之后，**整批**那个地址也可能跟着作废 —— 只有一份结果的批次里
+        // 两个地址本来就是同一个令牌。而快照不会自己变，不重拉的话「打包下载」
+        // 会原样留在屏幕上，再点就是 404（2026-10-11 装机复验时看到的）。
+        await polling.refresh()
       } catch (caught) {
         setFailed((previous) => ({
           ...previous,
@@ -102,8 +106,31 @@ export default function TaskScreen() {
         setBusy((previous) => ({ ...previous, [task.task_id]: false }))
       }
     },
-    [],
+    [polling.refresh],
   )
+
+  /**
+   * 整批打包下载。
+   *
+   * 和单项一样，不管成没成都**重拉一次快照**：服务端在结果被取走时把整批的
+   * `download_url` 置空、`expired` 置真（`queue_service` 里那段），界面得跟着变。
+   * 不重拉的话按钮会一直留着 —— 再点一下地址已经作废，界面上就是「点了没反应」，
+   * 因为整包这条路径没有自己的卡片，失败没有任何地方显示。
+   */
+  const onDownloadArchive = useCallback(async () => {
+    const url = snapshot?.result?.download_url
+    if (!url) return
+    try {
+      await downloadResult({
+        url,
+        filename: snapshot?.result?.archive_filename ?? 'filetools.zip',
+      })
+    } catch {
+      // 失败不在这里编话：整包没有自己的卡片，弹一句「下载失败」也无处安放。
+      // 重拉快照会把真实状态（比如「已经被下载过或已过期」）如实显示出来
+    }
+    await polling.refresh()
+  }, [snapshot, polling.refresh])
 
   const onShare = useCallback(
     async (task: ConversionTaskStatus) => {
@@ -160,7 +187,7 @@ export default function TaskScreen() {
     return '处理中'
   }, [status, counts?.cancelling])
 
-  if (!isApiConfigured) {
+  if (!isApiConfigured()) {
     return (
       <Screen>
         <ErrorView error={new ApiError('没有配置服务器地址', 'config_failed')} />
@@ -254,6 +281,7 @@ export default function TaskScreen() {
                 busy={Boolean(busy[task.task_id])}
                 local={downloaded[task.task_id] ?? null}
                 failure={failed[task.task_id] ?? null}
+                resultGone={snapshot.result?.expired ?? false}
                 shareReady={shareReady}
                 onDownload={() => void onDownload(task)}
                 onShare={() => void onShare(task)}
@@ -275,14 +303,7 @@ export default function TaskScreen() {
                   label="打包下载"
                   block
                   style={{ marginTop: SPACING.md }}
-                  onPress={() =>
-                    void downloadResult({
-                      url: snapshot.result!.download_url!,
-                      filename: snapshot.result?.archive_filename ?? 'filetools.zip',
-                    }).catch(() => {
-                      // 整包下载失败时给一句通用提示；单项的失败各自显示在自己的卡片上
-                    })
-                  }
+                  onPress={() => void onDownloadArchive()}
                 />
               </Card>
             ) : snapshot.result?.expired ? (
@@ -308,6 +329,7 @@ function TaskCard({
   busy,
   local,
   failure,
+  resultGone,
   shareReady,
   onDownload,
   onShare,
@@ -317,6 +339,15 @@ function TaskCard({
   busy: boolean
   local: DownloadedFile | null
   failure: ApiError | null
+  /**
+   * 服务端上这份结果已经没了（下载过一次、或超过保留时长）。
+   *
+   * **必须传下来。** 单项卡片自己的 `task.result.download_url` 在结果被取走之后
+   * 仍然原样留着（服务端只把整批那个 `download_url` 置空、`expired` 置真，
+   * 单项字段不动），所以只看单项字段的话，重新打开任务页会**留下一个
+   * 点了就 404 的「下载」按钮** —— 2026-10-11 的长回归真点出来过。
+   */
+  resultGone: boolean
   shareReady: boolean
   onDownload: () => void
   onShare: () => void
@@ -388,7 +419,7 @@ function TaskCard({
       ) : null}
 
       <View style={styles.taskActions}>
-        {task.result && !local ? (
+        {task.result && !local && !resultGone ? (
           <Button
             label={busy ? '下载中…' : '下载'}
             variant="primary"

@@ -109,6 +109,24 @@ async function nativeFilePart(file: MobileFile): Promise<NativeFilePart> {
  *
  * `lib.dom` 的 `FormData.append` 只声明了 `Blob`，原生这个形状是
  * `expo/fetch` 自己的约定，类型里没有，只能显式断言。
+ *
+ * ## ⚠️ 非 ASCII 文件名到了服务端是**编码过**的（已知，未修）
+ *
+ * `expo/fetch` 拼 multipart 时会对文件名做
+ * `encodeURIComponent(filename.replace(/\//g, '_'))`
+ * （`node_modules/expo/src/winter/fetch/convertFormData.ts` 的 `encodeFilename`，
+ * SDK 57 上实测如此）。所以选一个「中文样张.jpg」上去，服务端 `UploadFile.filename`
+ * 拿到的是 `%E4%B8%AD%E6%96%87%E6%A0%B7%E5%BC%A0.jpg`，
+ * 再被 `utils/files.py::sanitize_stem` 把 `%` 换成 `_`，
+ * 用户最后拿到 `E4_B8_AD_E6_96_87_E6_A0_B7_E5_BC_A0.png`。
+ *
+ * 0.1.1 的 Android 真机验收抓到的就是这一条：**结果字节完全正确**
+ * （是能打开的 PNG、尺寸像素都对），**只有名字是乱的**。
+ * Web 端不受影响 —— 浏览器发的是原始 UTF-8，服务端实测能正确接住。
+ *
+ * 修它要么动服务端的入参归一化，要么绕开 `expo/fetch` 自己拼 body，
+ * 两条都超出「0.1.1 修 Android 地址」这件事的范围，**没修**，
+ * 已如实写进 0.1.1 的发行说明。
  */
 async function appendFile(form: FormData, file: MobileFile): Promise<void> {
   const part = file.blob ?? (await nativeFilePart(file))

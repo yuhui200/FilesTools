@@ -47,6 +47,9 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DESKTOP = ROOT / "desktop"
 SRC_TAURI = DESKTOP / "src-tauri"
 
+#: 版本真相源（与 ``build_release.py`` 读的是同一个文件）。
+VERSION_FILE = ROOT / "VERSION"
+
 #: cargo 的产物目录。**纯 ASCII**，理由见模块开头第 1 条。
 DEFAULT_TARGET_DIR = "D:/filetools-build/target"
 
@@ -77,6 +80,13 @@ def sha256(path: pathlib.Path) -> str:
         for block in iter(lambda: handle.read(1 << 20), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def read_version() -> str:
+    version = VERSION_FILE.read_text(encoding="utf-8").strip()
+    if not version:
+        raise SystemExit(f"{VERSION_FILE} 是空的 —— 版本没有真相源，停止")
+    return version
 
 
 def target_dir() -> pathlib.Path:
@@ -137,8 +147,10 @@ def run_tauri_build() -> None:
 def main() -> int:
     release = target_dir() / "release"
     artifacts = DESKTOP / "artifacts"
+    version = read_version()
 
     print(f"仓库根：{ROOT}")
+    print(f"版本：{version}（来自 VERSION）")
     print(f"cargo 产物目录：{target_dir()}")
 
     if not (DESKTOP / "node_modules" / "@tauri-apps" / "cli").is_dir():
@@ -171,18 +183,30 @@ def main() -> int:
         return 1
 
     # ---- 2. NSIS 产物：找到它，复制成固定名字 ----
+    #
+    # **按版本号点名，不按「目录里只有一个」认。** Tauri 把版本写进输出文件名
+    # （``FileTools_<版本>_x64-setup.exe``，且没有改名配置项可改），而构建目录是
+    # 一轮轮攒下来的：打完 0.1.0，0.1.1 再打一次，那边就并排躺着两个。
+    #
+    # 早先这里是 ``glob("*-setup.exe")`` 加一句「多于一个就报错」—— 那个判据在
+    # 第一轮是对的（确实只有一个），第二轮就变成了「因为上次的产物还没删，所以
+    # 这次不干活」。它不是变松了，是**判据选错了维度**：这里要回答的问题是
+    # 「本版的那个在哪」，不是「目录里是不是恰好只有一个」。
     bundle = release / "bundle" / "nsis"
-    produced = sorted(bundle.glob("*-setup.exe")) if bundle.is_dir() else []
-    if not produced:
-        print(f"\n没找到 NSIS 安装器（看了 {bundle}）")
+    present = sorted(bundle.glob("*-setup.exe")) if bundle.is_dir() else []
+    source = bundle / f"FileTools_{version}_x64-setup.exe"
+    if not source.is_file():
+        print(f"\n没找到本版（{version}）的 NSIS 安装器：{source}")
+        if present:
+            print(f"  {bundle} 里现有的是：")
+            for path in present:
+                print(f"  - {path.name}")
         return 1
-    if len(produced) > 1:
-        print(f"\n{len(produced)} 个安装器，不知道复制哪一个：")
-        for path in produced:
-            print(f"  - {path.name}")
-        return 1
+    stale = [path.name for path in present if path != source]
+    if stale:
+        print(f"\n注：{bundle} 里还有别的版本的安装器（{', '.join(stale)}）——"
+              f" 这一步只按 VERSION={version} 取 {source.name}，它们不影响结果。")
 
-    source = produced[0]
     artifacts.mkdir(parents=True, exist_ok=True)
     destination = artifacts / INSTALLER_NAME
     shutil.copyfile(source, destination)

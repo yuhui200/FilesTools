@@ -21,7 +21,7 @@ import { Platform } from 'react-native'
 import { Directory, File, Paths } from 'expo-file-system'
 import type { DownloadProgress } from 'expo-file-system'
 
-import { API_BASE_URL, ApiError, CLIENT_CODES, apiUrl } from '@/services/api/client'
+import { ApiError, CLIENT_CODES, apiUrl, getApiBaseUrl } from '@/services/api/client'
 
 /** 结果落在缓存目录的子目录里 —— 系统清空间时可以回收，不会撑爆手机 */
 const CACHE_DIR = 'filetools-results'
@@ -181,7 +181,7 @@ function toDownloadError(error: unknown): ApiError {
   }
 
   // 认不出状态码：区分「根本没配地址」和「连不上」
-  if (!API_BASE_URL) return new ApiError('没有配置服务器地址', CLIENT_CODES.config)
+  if (!getApiBaseUrl()) return new ApiError('没有配置服务器地址', CLIENT_CODES.config)
   return new ApiError('无法连接服务器', CLIENT_CODES.network)
 }
 

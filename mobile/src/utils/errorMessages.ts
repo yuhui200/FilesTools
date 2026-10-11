@@ -152,11 +152,23 @@ const EXPLANATIONS: Record<string, ErrorExplanation> = {
   },
   /**
    * Mobile 与 Web 在这里**含义不同**：Web 是「读限制配置失败，用默认值继续」，
-   * App 是「压根没配服务器地址」，功能整个不可用，所以话术要指到配置上。
+   * App 是「压根没有服务器地址」，功能整个不可用，所以话术要指到能改的地方。
+   *
+   * 从 0.1.1 起地址在 App 里就能改（「我的 → 服务器」），所以这句话不再只
+   * 指向打包配置 —— 用户手上只有一个装好的 APK 时，那才是他唯一的出路。
    */
   [CLIENT_CODES.config]: {
     title: '没有配置服务器地址',
-    hint: '请在 mobile/.env 里设置 EXPO_PUBLIC_API_BASE_URL，然后重新启动或重新构建 App。',
+    hint: '请到「我的」页填写服务器地址；也可以让打包的人配一个默认地址再装一次。',
+  },
+  /**
+   * Android 的网络安全策略把明文 HTTP 挡在 socket 之前。地址、网络、后端
+   * 全都是好的，**是这台设备上这个安装包不允许连它** —— 所以话术不能是
+   * 「检查网络」，那会把用户支到完全错误的方向去。
+   */
+  [CLIENT_CODES.cleartext]: {
+    title: '这个服务器地址不被允许',
+    hint: 'Android 默认不允许明文 HTTP。请把地址改成 https://，或按 README 的说明用你服务器的地址重新打包。',
   },
   [CLIENT_CODES.file]: {
     title: '文件处理失败',

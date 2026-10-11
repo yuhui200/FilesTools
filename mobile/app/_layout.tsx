@@ -1,14 +1,18 @@
 /**
  * 根布局。
  *
- * 这里只做两件事：装配三个 Provider，然后给导航定一个 Stack。
+ * 这里只做两件事：装配四个 Provider，然后给导航定一个 Stack。
  * 四个 Tab 在 `(tabs)/_layout.tsx`，**不在这里** —— 详情页
  * （选参数、看进度）必须能盖住 Tab 栏，所以它们得是 Stack 上的兄弟，
  * 而不是 Tab 里的页面。
  *
- * 没有全局状态库：App 的状态只有「能力表」「主题」「历史」三份，
- * 前两份各有一个 Context，历史是即用即读。引入 Redux 之类只会让
+ * 没有全局状态库：App 的状态只有「能力表」「主题」「历史」「服务器地址」
+ * 四份，各有一个 Context，历史是即用即读。引入 Redux 之类只会让
  * 这十几个页面变重。
+ *
+ * **`ApiConfigProvider` 必须在 `CapabilitiesProvider` 外面**：后者一挂载
+ * 就去拉能力表，而地址要等前者把本地存的值读出来才是最终的那个。
+ * 顺序颠倒的话，改过地址的用户每次冷启动都会先拿旧地址发一轮请求。
  */
 
 import { Stack } from 'expo-router'
@@ -16,6 +20,7 @@ import { StatusBar } from 'expo-status-bar'
 import React from 'react'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 
+import { ApiConfigProvider } from '@/state/ApiConfigProvider'
 import { CapabilitiesProvider } from '@/state/CapabilitiesProvider'
 import { ThemeProvider, useColors, useTheme } from '@/theme'
 
@@ -68,9 +73,11 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <ThemeProvider>
-        <CapabilitiesProvider>
-          <RootStack />
-        </CapabilitiesProvider>
+        <ApiConfigProvider>
+          <CapabilitiesProvider>
+            <RootStack />
+          </CapabilitiesProvider>
+        </ApiConfigProvider>
       </ThemeProvider>
     </SafeAreaProvider>
   )

@@ -97,6 +97,11 @@ function toMobileFile(asset: DocumentPicker.DocumentPickerAsset): MobileFile {
  * 服务端就只能显示一个编号，用户认不出是哪个文件 —— 所以从 URI 最后
  * 一段还原。还原不出来时给一个中性名字，**不猜扩展名**：
  * 猜错会让服务端的类型判定与界面提示打架。
+ *
+ * ⚠️ 这里的名字**到了服务端仍会变样**（非 ASCII 时）。根因不在这一层，
+ * 见 `conversion.ts` 里 `appendFile` 上面那段说明：`expo/fetch` 自己会把
+ * multipart 的文件名 `encodeURIComponent` 一遍。别在这里再解码一遍 ——
+ * 那既治不了病，又会让名字里本来就带 `%` 的文件被解坏。
  */
 function nameOf(asset: DocumentPicker.DocumentPickerAsset): string {
   const given = (asset.name ?? '').trim()

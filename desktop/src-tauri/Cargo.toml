@@ -14,7 +14,7 @@ name = "filetools"
 # 这个值由 scripts/sync_version.py 从仓库根的 VERSION 写入，
 # scripts/verify_branding.py §八 会断言它与 VERSION 相等。
 # **不要手改** —— 它是版本真相源的第 N 个落点，不是第二份真相。
-version = "0.1.0"
+version = "0.1.1"
 description = "FileTools 桌面端（Windows）"
 edition = "2021"
 rust-version = "1.77"

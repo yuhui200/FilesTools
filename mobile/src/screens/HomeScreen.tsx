@@ -63,7 +63,7 @@ export default function HomeScreen() {
     setRefreshing(false)
   }, [reload])
 
-  if (!isApiConfigured) {
+  if (!isApiConfigured()) {
     // 没配地址时整个 App 都不能用，首页必须第一个说清楚，而不是显示空列表
     return (
       <Screen title="FileTools">

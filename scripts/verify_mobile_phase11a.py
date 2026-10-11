@@ -1099,6 +1099,37 @@ def section_c(page: Page, capabilities: dict) -> None:
     check(info["size"] == [480, 320], f"C1 产物尺寸与源一致（{info['size']}）")
     check("已保存到本机" in text_of(page), "C1 下载后按钮变成「已保存到本机」，没有第二次网络下载")
 
+    # 「打包下载」必须**不重新加载就自己消失**。
+    #
+    # 只有一份结果的批次里，整包地址与单项地址本来就是同一个令牌（2026-10-11 直接
+    # 打服务端量过：两个 `download_url` 逐字相同，`register_batch` 在只有一个结果时
+    # 直接把那一个文件登记成整批），所以这一份被取走之后整包那个也跟着作废；
+    # 而快照不会自己变 —— 原来的 `onDownload` 只记了
+    # 「已保存到本机」，快照一直是旧的，那个按钮原样留在屏幕上。再点一下：地址已
+    # 作废，而整包这条路径的 `.catch` 是空的，界面上连一句提示都没有 ——
+    # 用户看到的就是「点了没反应」。2026-10-11 修的就是这一段（下完重拉一次快照）。
+    # 注意这里**不能**用 page.goto 重新打开（下面那段就是这么做的），那样验的是
+    # 「重新挂载后快照是新的」，恰恰绕开了这个缺陷。
+    archive_left = None
+    for _ in range(30):
+        archive_left = page.eval_on_selector_all(
+            "button",
+            """els => els.filter(e => (e.innerText || '').trim() === '打包下载'
+                                      && !e.disabled
+                                      && e.getAttribute('aria-disabled') !== 'true').length""",
+        )
+        if archive_left == 0:
+            break
+        page.wait_for_timeout(1000)
+    check(
+        archive_left == 0,
+        f"下载之后不重新加载，「打包下载」也自己消失（残留 {archive_left} 个）",
+    )
+    check(
+        "结果已经被下载过或已过期" in text_of(page),
+        "下载之后不重新加载，界面就跟着说「已经被下载过或已过期」",
+    )
+
     # 一次性令牌：这个地址必须真的再也取不到。两路一起证 ——
     # 一路是直接打服务端（协议层），一路是**重新打开这个任务页**看界面
     # 是不是也如实说了「已经被下载过」（用户层）。只证前者的话，
@@ -1110,10 +1141,34 @@ def section_c(page: Page, capabilities: dict) -> None:
     check(url is None, "下载之后，服务端快照里的整包地址已经撤下（不能再下第二次）")
 
     page.goto(f"{APP}/task/{batch_id}", wait_until="load", timeout=120_000)
-    wait_text(page, "下载过", timeout=60_000)
+
+    # ⚠️ 等待条件不能用「下载过」这三个字 —— 任务页上**常驻**着一句
+    # 「…下载过一次后链接就会失效。」（进度条下面那行），页面一渲染就有，
+    # 拿它当条件等于没等。而快照是两跳的：`setCounts(progress)` 先落地、
+    # `setSnapshot(full)` 后到，中间那一帧 `snapshot` 还是 null。2026-10-11
+    # 紧采样量到过这个窗口：t=0.170s「下载过」已出现、t=0.214s 过期提示才出现，
+    # 那 44ms 就是断言抢跑的地方（于是**假红**）。
+    # 改成等**只有快照到位才可能出现**的那句提示。
+    wait_text(page, "结果已经被下载过或已过期", timeout=60_000)
     check(
         "结果已经被下载过或已过期" in text_of(page),
-        "重新打开这个任务页，界面如实说「已经被下载过」，没有留一个点了就 404 的按钮",
+        "重新打开这个任务页，界面如实说「已经被下载过」",
+    )
+
+    # 上面那句提示只管「整批」；**单项卡片上还可能残留一个「下载」按钮**。
+    # 服务端在结果被取走后只把整批的 `download_url` 置空、`expired` 置真，
+    # 单项的 `download_url` 原样留着，前端若只看单项字段就会留下一个
+    # 点了就 404 的死按钮。真点过：HTTP 404 + 界面「下载链接无效或已过期」。
+    # 这一条单独钉死，因为原来那句 label 声称了它、却从来没断言过它。
+    enabled_downloads = page.eval_on_selector_all(
+        "button",
+        """els => els.filter(e => (e.innerText || '').trim() === '下载'
+                                  && !e.disabled
+                                  && e.getAttribute('aria-disabled') !== 'true').length""",
+    )
+    check(
+        enabled_downloads == 0,
+        f"结果已失效的任务页上没有残留的可点「下载」按钮（找到 {enabled_downloads} 个）",
     )
     snapshot(page, "任务页（已下载过）")
     page.goto(f"{APP}/tools", wait_until="load", timeout=120_000)

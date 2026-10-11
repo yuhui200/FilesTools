@@ -61,4 +61,4 @@ export interface HistoryEntry {
 }
 
 /** App 版本号。与 `mobile/package.json` 的 version 一起改，见「我的」页 */
-export const APP_VERSION = '0.1.0'
+export const APP_VERSION = '0.1.1'

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""v0.1.0 正式发行的验收：``release/v0.1.0/`` 这份暂存树是否**真的**可发。
+"""发行验收：``release/v<VERSION>/`` 这份暂存树是否**真的**可发。
+
+要检查哪个版本不看这个文件 —— 看仓库根的 ``VERSION``。这样加了 0.1.1 之后
+这个脚本不用改一个字就能验新版本（0.1.0 的历史目录只做「三件套还在不在」的
+保留性检查，不参与本次的 SHA256 / 形态校验，见 :func:`section_structure`）。
 
 它检查的不是「文件在不在」——``Path.exists()`` 谁都会写。它检查的是：
 
@@ -212,10 +216,45 @@ def section_structure() -> tuple[str, Path]:
     if not release.is_dir():
         return version, release
 
-    # 目录名必须由 VERSION 决定 —— 手抄一个 v0.1.1 出来就是第二份真相
-    siblings = [p.name for p in (ROOT / "release").iterdir() if p.is_dir()]
-    check(area, siblings == [f"v{version}"],
-          f"release/ 下只有 v{version}（实际：{', '.join(siblings)}）")
+    # 目录名必须由 VERSION 决定 —— 手抄一个 v0.1.1 出来就是第二份真相。
+    #
+    # 但**历史版本要留着**：0.1.0 的产物是「已经发出去过的东西」的证据，
+    # 修 0.1.1 时把它删掉或覆盖掉，等于毁掉「上一版到底发了什么」的凭证。
+    # 所以规则不是「只许有一个」，而是：
+    #   1. 每个目录名都必须是合法的 v<semver>；
+    #   2. 当前 VERSION 对应的那个必须在；
+    #   3. **不许出现比 VERSION 更新的目录** —— 那正是原来这条断言要防的东西
+    #      （手工造一个还没发布的版本目录），换个写法守住同一件事；
+    #   4. 每个历史目录自己的三件套（说明 / 清单 / 校验和）也必须在，
+    #      否则「保留历史证据」只是留了个空壳。
+    entries = sorted(
+        (p for p in (ROOT / "release").iterdir() if p.is_dir()),
+        key=lambda p: p.name,
+    )
+    siblings = [p.name for p in entries]
+    check(area, all(re.fullmatch(r"v\d+\.\d+\.\d+", name) for name in siblings),
+          f"release/ 下每个目录都是 v<semver>（实际：{', '.join(siblings) or '（空）'}）")
+    check(area, f"v{version}" in siblings, f"release/v{version}/ 在 release/ 下")
+
+    def as_tuple(name: str) -> tuple[int, ...]:
+        return tuple(int(part) for part in name.lstrip("v").split("."))
+
+    newer = [name for name in siblings if as_tuple(name) > as_tuple(f"v{version}")]
+    check(area, not newer,
+          f"release/ 下没有比 VERSION 更新的目录（多出来的是 {', '.join(newer)}）")
+
+    historical = [name for name in siblings if name != f"v{version}"]
+    if historical:
+        note(f"保留的历史发行目录：{', '.join(historical)} —— 它们是「上一版到底发了什么」"
+             "的凭证，本脚本只读不改，也**不参与**本次的 SHA256 / 形态校验")
+
+    for name in historical:
+        older = ROOT / "release" / name
+        missing = [f for f in ("RELEASE-NOTES.md", "RELEASE-MANIFEST.json", "SHA256SUMS.txt")
+                   if not (older / f).is_file()]
+        check(area, not missing,
+              f"release/{name}/ 的历史三件套还在（缺 {', '.join(missing)}）" if missing
+              else f"release/{name}/ 的历史三件套还在")
 
     for name in ("RELEASE-NOTES.md", "RELEASE-MANIFEST.json", "SHA256SUMS.txt"):
         check(area, (release / name).is_file(), f"release/v{version}/{name} 存在")
@@ -426,6 +465,17 @@ def section_manifest(release: Path, version: str) -> None:
            if not (release / name).is_file() or sha256(release / name) != digest]
     check(area, not bad, f"按 SHA256SUMS.txt 实算全部匹配（不符 {len(bad)} 个）")
 
+    # 上面那几条**看不出换行有问题** —— ``splitlines()`` 会把 ``\r`` 一并吃掉，
+    # 于是文件即使每行末尾带 ``\r`` 也照样全绿。得直接读原始字节。
+    # 为什么要紧：发行说明让用户跑 ``sha256sum -c SHA256SUMS.txt``，而 coreutils
+    # **不会**替你剥掉 ``\r``，文件名会变成 ``'x.zip'\r`` → 每个文件都
+    # 「No such file or directory」、退出码 1。2026-10-11 在 Windows 上用
+    # ``build_release.py`` 生成的两份（v0.1.0 与 v0.1.1）就是这么坏的
+    # （LF 对照 exit 0 / CRLF 对照 exit 1），修的是生成端。
+    raw = sums_path.read_bytes()
+    check(area, b"\r\n" not in raw,
+          "SHA256SUMS.txt 是 LF 换行（sha256sum -c 能直接跑）")
+
     # 发行说明必须提到这个版本，且**如实写出没做到的部分**
     notes_path = release / "RELEASE-NOTES.md"
     if notes_path.is_file():
@@ -464,10 +514,19 @@ def section_environment_limited() -> None:
         done = subprocess.run([adb, "devices"], capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=60)
         devices = [l for l in done.stdout.splitlines()[1:] if l.strip()]
+        # 这一项问的是**物理设备**。模拟器在 ``adb devices`` 里一样会列出来
+        # （串号形如 ``emulator-5554``），只数行数会把一台 AVD 说成「接上了
+        # 1 台设备」—— 读起来像是有真机可用。按串号前缀分开数。
+        emulators = [l for l in devices if l.split()[0].startswith("emulator-")]
+        physical = len(devices) - len(emulators)
         adb_ok = bool(devices)
-        if adb_ok:
+        if physical:
             skip(area, "Android 真机安装",
-                 f"接上了 {len(devices)} 台设备，但本轮未执行安装")
+                 f"接上了 {physical} 台物理设备，但本轮未执行安装")
+        elif emulators:
+            skip(area, "Android 真机安装",
+                 f"接上了 {len(emulators)} 台设备，但**全是模拟器**"
+                 "（串号 emulator-*），没有物理设备 —— 本轮未执行真机安装")
         else:
             skip(area, "Android 真机安装", "adb 可用但一台物理设备都没接")
     else:
