@@ -17,6 +17,7 @@ from PIL import Image
 
 from config import settings
 from services.job_store import job_store
+from utils.files import TEMP_PREFIX
 from tests.conftest import build_image_bytes, image_files, run_task
 
 CONVERT = "/api/image/convert"
@@ -28,9 +29,19 @@ def post(client: TestClient, endpoint: str, images: list[tuple[str, bytes]], **f
 
 
 def temp_dirs_under(path: Path) -> set[Path]:
+    """``path`` 下**本服务自己的**临时目录（只认 ``filetools_`` 前缀）。
+
+    过滤掉其它前缀很要紧：``settings.TEMP_ROOT`` 默认是 ``None``
+    （``config.py`` 里它由环境变量决定，测试不设它），这时 ``path`` 就是
+    **整台机器共享的 ``%TEMP%``**。不过滤的话，下面那几条前后比较会同时
+    **假红**（别的进程新建一个目录 → 被读成「本服务没清理干净」）与
+    **假绿**（别的进程删掉一个目录 → 把真正残留的任务目录盖掉）。
+
+    前缀取自 ``utils.files.TEMP_PREFIX``，不另抄一份字面量。
+    """
     if not path.is_dir():
         return set()
-    return {item for item in path.iterdir() if item.is_dir()}
+    return {item for item in path.iterdir() if item.is_dir() and item.name.startswith(TEMP_PREFIX)}
 
 
 # ----------------------------------------------------------------------
@@ -312,12 +323,15 @@ def test_batch_temp_dirs_are_removed_after_download(client: TestClient) -> None:
     body = post(client, CONVERT, images, target_format="png").json()
 
     during = temp_dirs_under(Path(settings.TEMP_ROOT) if settings.TEMP_ROOT else _system_temp())
-    assert len(during) > len(before), "处理期间应存在任务临时目录"
+    # 只看数量会**假绿**：正好有别的目录冒出来，数量一样变大，
+    # 于是「这一批真的建了目录」根本没被验到。
+    assert during - before, "处理期间应存在本服务新建的任务临时目录"
 
     assert client.get(body["download_url"]).status_code == 200
 
+    # 集合相等而不是数量相等：数量相等在「少一个又多一个」时也会通过。
     after = temp_dirs_under(Path(settings.TEMP_ROOT) if settings.TEMP_ROOT else _system_temp())
-    assert len(after) == len(before), f"下载后仍残留临时目录：{after - before}"
+    assert after == before, f"下载后仍残留临时目录：{after - before}"
 
 
 def test_all_broken_batch_leaves_no_temp_dir(client: TestClient) -> None:
@@ -334,7 +348,25 @@ def test_all_broken_batch_leaves_no_temp_dir(client: TestClient) -> None:
     assert response.status_code in (400, 415)
 
     after = temp_dirs_under(temp_root)
-    assert len(after) == len(before), f"失败后残留临时目录：{after - before}"
+    assert after == before, f"失败后残留临时目录：{after - before}"
+
+
+def test_temp_dirs_under_counts_only_our_own_dirs(tmp_path: Path) -> None:
+    """``temp_dirs_under()`` 只认 ``filetools_`` 前缀，别的目录一个都不算。
+
+    反向钉死：把过滤拿掉，这条立刻红。上面几个用例的前后比较靠的就是这个统计范围。
+    """
+    foreign = tmp_path / "some_other_program"
+    foreign.mkdir()
+    assert temp_dirs_under(tmp_path) == set(), "非 filetools_ 前缀的目录不该被统计"
+
+    ours = tmp_path / f"{TEMP_PREFIX}task"
+    ours.mkdir()
+    assert temp_dirs_under(tmp_path) == {ours}, "本服务的目录必须被统计到"
+
+    ours.rmdir()
+    assert temp_dirs_under(tmp_path) == set(), "删掉之后必须不再被统计"
+    assert foreign.is_dir(), "过滤不能顺手把别人的目录也算没了"
 
 
 def test_job_store_does_not_grow_on_failure(client: TestClient) -> None:

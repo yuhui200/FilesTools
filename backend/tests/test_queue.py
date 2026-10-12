@@ -43,7 +43,7 @@ from utils.errors import (
     TaskNotFoundError,
     TaskNotRetryableError,
 )
-from utils.files import remove_dir
+from utils.files import TEMP_PREFIX, remove_dir
 from tests.conftest import (
     build_image_bytes,
     build_pdf_bytes,
@@ -59,10 +59,26 @@ TO_IMAGES = "/api/pdf/to-images"
 
 
 def temp_dirs() -> set[Path]:
-    root = Path(settings.TEMP_ROOT) if settings.TEMP_ROOT else Path(tempfile.gettempdir())
+    """本服务在临时根目录下留下的目录（只认 ``filetools_`` 前缀）。
+
+    前缀过滤**不是**可有可无的整洁：``settings.TEMP_ROOT`` 默认是 ``None``
+    （``config.py`` 里它是环境变量驱动的，测试不设它），此时根就是**整台机器共享的
+    ``%TEMP%``** —— 里面躺着这台机器上所有进程的目录。用它做前后比较会**同时**
+    出现两种错：
+
+    - **假红**：别的进程/别的测试恰好新建一个目录 → 被当成「本服务的目录没清理干净」；
+    - **假绿**：别的进程恰好删掉一个目录 → 把真正残留的任务目录**盖掉**，
+      断言照样通过。
+
+    仓库里另外几处（``test_office_api.py`` / ``test_pdf_to_word_api.py`` /
+    ``test_image_metadata.py``）早就是按这个前缀过滤的，只有本文件与
+    ``test_batch.py`` 漏了。前缀取自 ``utils.files.TEMP_PREFIX``，
+    **不再抄一份字面量** —— 抄一份就是第七份「第二真相」。
+    """
+    root = Path(settings.TEMP_ROOT or tempfile.gettempdir())
     if not root.is_dir():
         return set()
-    return {item for item in root.iterdir() if item.is_dir()}
+    return {item for item in root.iterdir() if item.name.startswith(TEMP_PREFIX)}
 
 
 async def _noop_handler(item: TaskItem, group: TaskGroup) -> dict:
@@ -302,6 +318,7 @@ def test_downloaded_result_marks_snapshot_expired(client: TestClient) -> None:
 
 def test_download_releases_temp_files(client: TestClient) -> None:
     """下载之后临时目录必须清空（§14 / §19）。"""
+    before = temp_dirs()
     response = submit_task(
         client,
         CONVERT,
@@ -314,10 +331,14 @@ def test_download_releases_temp_files(client: TestClient) -> None:
     snapshot = wait_for_task(client, response.json()["group_id"])
 
     during = temp_dirs()
+    # 「这一批确实建了目录」得自己证明。只比数量的话，别人恰好新建一个目录也能
+    # 让数量变大，于是后半段「清理」等于没验 —— 这是**假绿**，不是假红。
+    assert during - before, "处理期间应当存在本服务新建的任务临时目录"
     assert client.get(snapshot["result"]["download_url"]).status_code == 200
-    after = temp_dirs()
 
-    assert len(after) < len(during), "下载后任务目录应当被删除"
+    # 断言「回到 before」而不是「比 during 少一个」：后者只要少掉**任意**一个目录
+    # 就算过 —— 一批两个文件只清掉一个也照样绿。
+    assert temp_dirs() == before, f"下载后任务目录应当被全部删除，仍残留：{temp_dirs() - before}"
 
 
 def test_all_failed_batch_leaves_no_temp_dir(client: TestClient) -> None:
@@ -331,7 +352,29 @@ def test_all_failed_batch_leaves_no_temp_dir(client: TestClient) -> None:
     )
     wait_for_task(client, response.json()["group_id"])
 
-    assert temp_dirs() == before
+    assert temp_dirs() == before, f"整批失败后仍残留任务目录：{temp_dirs() - before}"
+
+
+def test_temp_dirs_counts_only_our_own_dirs(tmp_path: Path, monkeypatch) -> None:
+    """``temp_dirs()`` 只统计本服务自己的临时目录，别人的一个都不许算进来。
+
+    这条是**反向钉死**：把前缀过滤拿掉，它立刻红。上面两个用例之所以可能假红/假绿，
+    根源就在这个统计范围上，所以统计范围本身必须有测试守。
+    """
+    from utils.files import create_temp_dir
+
+    monkeypatch.setattr(settings, "TEMP_ROOT", str(tmp_path))
+
+    foreign = tmp_path / "some_other_program"
+    foreign.mkdir()
+    assert temp_dirs() == set(), "非 filetools_ 前缀的目录不该被统计"
+
+    ours = create_temp_dir()
+    assert temp_dirs() == {ours}, "本服务创建的目录必须被统计到"
+
+    remove_dir(ours)
+    assert temp_dirs() == set(), "删掉之后必须不再被统计"
+    assert foreign.is_dir(), "过滤不能顺手把别人的目录也删了"
 
 
 # ----------------------------------------------------------------------

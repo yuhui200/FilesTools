@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import Response
 
 from routers.pdf_params import (
@@ -37,6 +37,7 @@ from routers.pdf_schemas import (
     build_pdf_response,
 )
 from routers.tasks import TaskCreatedResponse, build_task_response
+from routers.uploads import declare_upload_filenames
 from services.intake import run_in_pool
 from services.pdf_service import intake_pdf, render_input_thumbnail
 from services.pdf_tools import (
@@ -51,7 +52,7 @@ from tasks.pdf_tasks import submit_pdf_to_images
 from utils.errors import ValidationError
 from utils.files import create_temp_dir, remove_dir
 
-router = APIRouter(prefix="/api/pdf", tags=["pdf"])
+router = APIRouter(prefix="/api/pdf", tags=["pdf"], dependencies=[Depends(declare_upload_filenames)])
 
 # 缩略图渲染很快，但仍然放进线程池，且给一个短超时
 THUMBNAIL_TIMEOUT_SECONDS = 20

@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from compressors.pipeline import PipelineOptions
 from routers.params import (
@@ -18,9 +18,10 @@ from routers.params import (
     parse_target_bytes,
 )
 from routers.tasks import TaskCreatedResponse, build_task_response
+from routers.uploads import declare_upload_filenames
 from tasks.image_tasks import submit_image_batch
 
-router = APIRouter(prefix="/api/image", tags=["image"])
+router = APIRouter(prefix="/api/image", tags=["image"], dependencies=[Depends(declare_upload_filenames)])
 
 # 结果文件名的后缀。格式转换靠扩展名就能看出来，不再额外加后缀。
 OUTPUT_SUFFIX = ""

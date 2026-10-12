@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, Query, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile, status
 
 from compressors.resizer import ResizeRequest
 from routers.conversion_params import resolve_options
@@ -38,12 +38,13 @@ from routers.params import (
     parse_quality_value,
     parse_target_bytes,
 )
+from routers.uploads import declare_upload_filenames
 from services.conversion_service import ConversionOptions, conversion_capabilities
 from services.queue_service import task_queue
 from tasks.conversion_tasks import submit_conversion_batch
 from utils.errors import TaskNotFoundError, ValidationError
 
-router = APIRouter(prefix="/api/conversion", tags=["conversion"])
+router = APIRouter(prefix="/api/conversion", tags=["conversion"], dependencies=[Depends(declare_upload_filenames)])
 
 _TARGET_DESC = "这一批要转成什么，取值见 /api/conversion/capabilities"
 _QUALITY_PRESET_DESC = "图片质量档位；留空表示使用默认值"

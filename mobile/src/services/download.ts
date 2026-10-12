@@ -15,13 +15,20 @@
  *   用 `fetch` 全读进内存会直接顶到堆上限。
  * - **Web**：`expo-file-system` 在 Web 上是**空实现**（调了只 `console.warn`
  *   然后 resolve `undefined`），所以这条分支必须走浏览器自己的下载路径。
+ *
+ * ## 名字
+ *
+ * 两个平台最终都叫**服务端给的那个结果名**（`request.filename`）。原生下载
+ * 自己取的名字是不可靠的 —— 中文名会落成一次性令牌，理由见
+ * `./resultName.ts`，那里也是改名的判据所在。
  */
 
 import { Platform } from 'react-native'
 import { Directory, File, Paths } from 'expo-file-system'
 import type { DownloadProgress } from 'expo-file-system'
 
-import { ApiError, CLIENT_CODES, apiUrl, getApiBaseUrl } from '@/services/api/client'
+import { ApiError, CLIENT_CODES, IS_DEV, apiUrl, getApiBaseUrl } from '@/services/api/client'
+import { solveResultName } from '@/services/resultName'
 
 /** 结果落在缓存目录的子目录里 —— 系统清空间时可以回收，不会撑爆手机 */
 const CACHE_DIR = 'filetools-results'
@@ -39,8 +46,11 @@ export interface DownloadRequest {
   /** 服务端给的 `download_url`（相对路径，如 `/api/download/xxxx`） */
   url: string
   /**
-   * 结果文件名。Web 分支靠它决定另存为什么名字 ——
-   * 浏览器只会拿 URL 的最后一段当文件名，那是一串令牌，不是用户认得的东西。
+   * 结果文件名，服务端随任务一起给的（`result.items[].filename`）。
+   *
+   * 两个平台都靠它决定文件最终叫什么 —— 浏览器只会拿 URL 的最后一段
+   * 当文件名（那是一串令牌）；原生的 `guessFileName` 对中文名同样认不出来，
+   * 也会落成令牌。传了它，两边就都叫用户认得的那个名字。
    */
   filename?: string
   /** 取消下载（组件卸载、用户返回时用） */
@@ -77,7 +87,35 @@ export async function downloadResult(request: DownloadRequest): Promise<Download
     throw new ApiError('下载结果失败，请重试', CLIENT_CODES.file)
   }
 
-  return { uri: file.uri, name: file.name, size: file.size }
+  const named = renameToResultName(file, request.filename)
+  return { uri: named.uri, name: named.name, size: named.size }
+}
+
+/**
+ * 把下下来的文件改成结果该有的名字。判据在 `./resultName.ts`，这里只负责动手。
+ *
+ * 改不动就**原样返回**：文件已经完好地落在盘上，为了一个名字把整次下载判失败，
+ * 用户会连已经拿到的结果都丢掉 —— 那比名字难看糟得多。
+ */
+function renameToResultName(file: File, wanted: string | undefined): File {
+  const name = solveResultName(wanted, file.name)
+  if (!name) return file
+
+  try {
+    const target = new File(file.parentDirectory, name)
+    // `rename` 底层是 `Files.move`（Android）/ 等价的搬移，目标已存在会直接抛。
+    // 目录是我们自己的缓存目录，同名文件只可能是上一次下载的残留 —— 删掉它。
+    if (target.exists) target.delete()
+    // 就地改：改完 `file` 自己的 uri 跟着变，`name` / `size` 都是读 uri 的 getter
+    file.rename(name)
+    return file
+  } catch (caught) {
+    if (IS_DEV) {
+      const detail = caught as { name?: string; message?: string }
+      console.warn('[download] 改名失败：', file.uri, name, detail?.name, detail?.message)
+    }
+    return file
+  }
 }
 
 /** `totalBytes` 为 -1 表示服务器没给 Content-Length —— 这时不报进度，编一个百分比比不报更糟 */

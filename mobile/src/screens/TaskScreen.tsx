@@ -109,25 +109,54 @@ export default function TaskScreen() {
     [polling.refresh],
   )
 
+  /** 整包下载进行中 —— 只用来给按钮转圈并挡住第二次点击 */
+  const [archiveBusy, setArchiveBusy] = useState(false)
+  /** 整包下载失败。**画在「全部结果」那张卡里**，见下面的注释 */
+  const [archiveFailure, setArchiveFailure] = useState<ApiError | null>(null)
+
   /**
-   * 整批打包下载。
+   * 整批打包下载（规格 §六）。
    *
    * 和单项一样，不管成没成都**重拉一次快照**：服务端在结果被取走时把整批的
    * `download_url` 置空、`expired` 置真（`queue_service` 里那段），界面得跟着变。
-   * 不重拉的话按钮会一直留着 —— 再点一下地址已经作废，界面上就是「点了没反应」，
-   * 因为整包这条路径没有自己的卡片，失败没有任何地方显示。
+   * 不重拉的话按钮会一直留着 —— 再点一下地址已经作废，界面上就是「点了没反应」。
+   *
+   * ## 失败要说话
+   *
+   * 这里原来是 `catch {}`，注释写着「整包没有自己的卡片，弹一句『下载失败』也无处安放」。
+   * 那句话在写下时是对的，「全部结果」卡片是后来才有的 —— 现在它有地方安放了，
+   * 于是原来那个空 catch 就成了**用户点了没反应**：地址真作废的话下面那句
+   * `expired` 提示还能兜住，但网络断了、ZIP 没打出来、500 这些情况快照一个字都不会变，
+   * 屏幕上什么都不会发生。
+   *
+   * 措辞走 `explainError`，和单项下载失败**同一条口径**（`onDownload` 那个 catch）：
+   * 它只认错误码 + 服务端给的人话，异常对象本身的 `message`
+   * （`TypeError: ...`、`Failed to fetch` …）永远不上屏，堆栈更不会。
+   *
+   * ## 为什么只画在卡片里，不做页面级提示
+   *
+   * 这条消息和卡片下面那句「结果已经被下载过或已过期」是**互斥**的：真过期时
+   * 重拉的快照会把 `download_url` 撤下，卡片连同这条提示一起消失，由那句话接管。
+   * 挂到页面级就会两条消息同时站着，还互相打架。
    */
   const onDownloadArchive = useCallback(async () => {
     const url = snapshot?.result?.download_url
     if (!url) return
+    // 挡住第二次点击：地址是一次性令牌，两个请求同时在飞时，先回来的那个
+    // 会把令牌用掉，后一个变成 404 —— 下载明明成功，屏幕上却多一句失败提示
+    setArchiveBusy(true)
+    setArchiveFailure(null)
     try {
       await downloadResult({
         url,
         filename: snapshot?.result?.archive_filename ?? 'filetools.zip',
       })
-    } catch {
-      // 失败不在这里编话：整包没有自己的卡片，弹一句「下载失败」也无处安放。
-      // 重拉快照会把真实状态（比如「已经被下载过或已过期」）如实显示出来
+    } catch (caught) {
+      setArchiveFailure(
+        caught instanceof ApiError ? caught : new ApiError('下载失败', 'network_error'),
+      )
+    } finally {
+      setArchiveBusy(false)
     }
     await polling.refresh()
   }, [snapshot, polling.refresh])
@@ -299,9 +328,18 @@ export default function TaskScreen() {
                     ? '成功的结果会打包成一个 ZIP 下载。'
                     : '下载这一份结果。'}
                 </AppText>
+                {/* 打包下载失败时在这里说一句。复用页面已有的 `Notice`，
+                    不另起一套 toast —— 这句和单项卡片上那句失败提示是同一个组件 */}
+                {archiveFailure ? (
+                  <Notice
+                    text={explainError(archiveFailure.code, archiveFailure.message).title}
+                    tone="danger"
+                  />
+                ) : null}
                 <Button
-                  label="打包下载"
+                  label={archiveBusy ? '打包中…' : '打包下载'}
                   block
+                  loading={archiveBusy}
                   style={{ marginTop: SPACING.md }}
                   onPress={() => void onDownloadArchive()}
                 />

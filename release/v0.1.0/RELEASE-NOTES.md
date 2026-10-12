@@ -88,14 +88,15 @@ zip 是确定性的（同一份 `frontend/dist` 打两次逐字节相同），`i
 6. **Windows 桌面版未启用 CSP**（`csp: null`）。原因是本版用 WebView2 的远程调试端口
    实测打不开，CSP 只验到一半，与其开一个验不全的策略不如先不开，等能验了再开。
 7. **Windows 桌面版的拖拽只在文件选择区内生效**，不是窗口任意位置。
-8. **Android 版上传非 ASCII 文件名，结果文件名会变成一串十六进制**
-   （0.1.0 起就有，0.1.1 仍在，**尚未修**）。选「中文样张.jpg」转出来的结果叫
-   `E4_B8_AD_E6_96_87_E6_A0_B7_E5_BC_A0.png` —— **文件内容是好的**（字节、
-   尺寸、像素都对），**只有名字是乱的**。根因在 `expo/fetch` 拼 multipart 时对文件名做了
-   `encodeURIComponent`（`node_modules/expo/src/winter/fetch/convertFormData.ts`
-   的 `encodeFilename`），服务端再把 `%` 换成 `_`。
-   **Web 端不受影响**（浏览器发的是原始 UTF-8，服务端实测能正确接住）。
-   这一条是 0.1.1 的 Android 真机验收时才抓到的，写在这里是因为它同样存在于 0.1.0。
+8. **Android 版上传非 ASCII 文件名，结果文件名会变成一串十六进制。**
+   选「中文样张.jpg」转出来的结果叫 `E4_B8_AD_E6_96_87_E6_A0_B7_E5_BC_A0.png` ——
+   **文件内容是好的**（字节、尺寸、像素都对），**只有名字是乱的**。根因在 `expo/fetch`
+   拼 multipart 时对文件名做了 `encodeURIComponent`
+   （`node_modules/expo/src/winter/fetch/convertFormData.ts` 的 `encodeFilename`），
+   服务端再把 `%` 换成 `_`。**Web 端不受影响**（浏览器发的是原始 UTF-8，服务端实测能正确接住）。
+   这一条是 0.1.1 的 Android 设备验收时才抓到的，写在这里是因为它同样存在于 0.1.0。
+   **它已经在 0.1.1 里修掉了**（客户端显式声明、服务端才解码），请在 0.1.1 的说明里看细节；
+   本目录这份 0.1.0 的产物**没有重打**，0.1.0 的 APK 仍然带着这个问题。
 
 ## 校验下载的文件
 

@@ -1,3 +1,3 @@
 4ed56f97cebb1f12dce5876f40d058fad1451d670901dfd3778656717d2714c0  web/FileTools-Web-0.1.1.zip
 5c5799db96b4d81eb94570949e3f9016a84bf166975bf7046a63c506c9277cb5  windows/FileTools-Setup-x64.exe
-01202bf39b826a807f1e8efcf009ac45388426d0f3cd91fae9c75fa68b32f22e  android/FileTools-0.1.1-release.apk
+184a01010804472b87aaae52fc5655afcd69d336b7cc0c843e3d8ca5beb31bce  android/FileTools-0.1.1-release.apk

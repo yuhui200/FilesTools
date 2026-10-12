@@ -19,14 +19,15 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel, Field
 
 from compressors.metadata import read_metadata
+from routers.uploads import declare_upload_filenames
 from services.intake import intake_upload, run_in_pool
 from utils.files import create_temp_dir, remove_dir
 
-router = APIRouter(prefix="/api/image", tags=["image"])
+router = APIRouter(prefix="/api/image", tags=["image"], dependencies=[Depends(declare_upload_filenames)])
 
 
 class MetadataFieldResponse(BaseModel):

@@ -25,15 +25,21 @@ Expo 客户端，四个底部 Tab，能力驱动的工具列表与参数表单�
    再也取不到（脚本会亲自再取一次，必须 404/410）。
 6. **用户看不到任何内部信息**（§十四/§三十六）—— 走过的每一个页面的
    渲染文本里，都不许出现堆栈、文件路径、内部模块名。
-7. **窄屏与触控**（§二十三）—— 375 / 390 / 414 三档无横向溢出，
+7. **打包下载成功要说、失败也要说**（§六）—— 一批两个文件走真界面提交，
+   整批下下来的必须是一个**真 ZIP**：每个成员用 ``PIL`` 打开、CRC 逐个校验、
+   成员名与尺寸分别对得上各自那张源图（同一个文件塞两遍过不了这一关）。
+   失败两路都注入一次（服务端 500、连不上），要求界面上**看得见那句话**、
+   不泄漏内部信息、不留未处理的 Promise rejection；随后解除注入，
+   **同一批还要能真的下成** —— 证明那句提示没把人带进死胡同。
+8. **窄屏与触控**（§二十三）—— 375 / 390 / 414 三档无横向溢出，
    所有可点控件实测高度 ≥ 44。
-8. **取消与重试真的能用**（§四十九）—— 四份 DOCX 堆在 LibreOffice 的单飞锁
+9. **取消与重试真的能用**（§四十九）—— 四份 DOCX 堆在 LibreOffice 的单飞锁
    后面，点「取消」之后**服务端的 cancelled 计数真的涨了**、整批落成
    ``cancelled``；再拿一份**真的会失败**的 DOCX（zip 结构完好、里面
    ``document.xml`` 被改坏，能穿过收件层、到 LibreOffice 才炸）走一遍
    「失败 → 重试 → 再失败」，服务端的 ``retry_count`` 真的涨到 1，然后
    **服务端与界面两边都不再给重试按钮**（手动重试上限是 1）。
-9. **本机地址不许写进 App**（§四十九 的 ❌ 清单）—— ``src/`` 与 ``app/`` 里
+10. **本机地址不许写进 App**（§四十九 的 ❌ 清单）—— ``src/`` 与 ``app/`` 里
    出现 ``localhost`` / ``127.0.0.1`` / ``10.0.2.2`` 的硬编码地址即为失败。
    地址只能从 ``EXPO_PUBLIC_API_BASE_URL`` 读（注释里教人怎么配不算）。
 
@@ -181,6 +187,20 @@ page_texts: dict[str, str] = {}
 #: 用 note 而不是硬塞一个 PASS —— 把「没做」写成「通过」就是放水。
 notes: list[str] = []
 
+#: **我们自己注入的失败**在控制台留下的那两条资源错误，在 `console_errors`
+#: 里的下标区间（`[起, 止)`），由 C4 段登记。
+#:
+#: 为什么要单列：C4 为了验「下载失败时界面上有话说」，故意让浏览器对一次
+#: 下载请求收到 500、再故意掐断一次。**浏览器对这两种情况本来就会在控制台记
+#: 一条**（「responded with a status of 500」/「net::ERR_FAILED」）—— 那是
+#: **注入这个动作**的产物，不是产品代码的产物。全局那条「控制台无错误」
+#: 如果不认这件事，就会把「我们主动制造的失败」算成缺陷（假红）；
+#: 如果为了它把整条断言删掉，那就成了放水。
+#:
+#: 所以：区间内的条目**另行断言**（必须正好两条、正好好是那两种），
+#: 区间外的照旧一条都不许有。
+injected_console_span: list[int] = []
+
 
 def check(ok: bool, label: str) -> None:
     results.append((bool(ok), label))
@@ -309,6 +329,22 @@ draw.rectangle([0, 240, 119, 319], fill=(30, 60, 220))
 draw.rectangle([360, 240, 479, 319], fill=(240, 200, 20))
 img.save(os.path.join(out, "sample.jpg"), "JPEG", quality=92)
 
+# 1b) 打包下载（规格 §六）要一批**结果多于一个**的批次。
+#
+#     只有一个结果时服务端直接把那一个文件当整批给（`register_batch` 里
+#     `single` 那一支），**根本不打包** —— 拿单个文件永远验不到 ZIP。
+#     这两张故意做出**互不相同**的尺寸与配色：ZIP 里两个成员各自解开之后
+#     必须分别对得上自己那张源图，把同一个文件塞两次是过不了的。
+for _name, _size, _corner in (
+    ("pair1.jpg", (200, 120), (10, 200, 200)),
+    ("pair2.jpg", (320, 240), (200, 40, 160)),
+):
+    _pair = Image.new("RGB", _size, (255, 255, 255))
+    ImageDraw.Draw(_pair).rectangle(
+        [0, 0, _size[0] // 3, _size[1] // 3], fill=_corner
+    )
+    _pair.save(os.path.join(out, _name), "JPEG", quality=90)
+
 # 各源格式一份：给「每条能力的默认参数都提交一次」那一段用。
 # 这 10 种要与服务端能力表里出现过的 source_type 对齐，缺一种就会有若干条
 # 能力提交不了（脚本会如实报出来，不会假装通过）。
@@ -401,6 +437,39 @@ def build_fixtures() -> None:
     _run_backend_python(_FIXTURE_CODE, SAMPLES)
 
 
+#: 把 ZIP 里**每一个成员**都当作真文件打开 —— 不看目录、不看大小，看它解码出来是什么。
+#: `testzip()` 整包做一遍 CRC 校验，只做一次（它对每个成员都要读一遍全包）。
+_ZIP_INSPECT_CODE = r'''
+import io, json, sys, zipfile
+
+from PIL import Image
+
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    broken = archive.testzip()
+    items = []
+    for info in archive.infolist():
+        entry = {"name": info.filename, "bytes": info.file_size, "format": None, "size": None}
+        try:
+            with Image.open(io.BytesIO(archive.read(info.filename))) as image:
+                image.load()
+                entry["format"] = image.format
+                entry["size"] = list(image.size)
+        except Exception:
+            pass
+        items.append(entry)
+print(json.dumps({"broken": broken, "items": items}))
+'''
+
+
+def inspect_zip(path: pathlib.Path) -> dict:
+    """解开 ZIP，把每个成员当作真文件打开。返回 `{broken, items}`。"""
+    raw = _run_backend_python(_ZIP_INSPECT_CODE, path)
+    lines = [line for line in raw.splitlines() if line.strip()]
+    if not lines:
+        raise SystemExit(f"打开 {path.name} 没有拿到任何输出（退出码却是 0）")
+    return json.loads(lines[-1])
+
+
 def inspect(path: pathlib.Path, kind: str) -> dict:
     """用真的解码器打开产物，返回它的实际情况。
 
@@ -479,7 +548,14 @@ def build_mobile_driver() -> pathlib.Path:
                     # 显式点名只让它进来，免得把 react 那套环境类型也拖进来。
                     "types": ["node"],
                 },
-                "files": ["src/utils/options.ts", "src/utils/errorMessages.ts"],
+                # `resultName.ts` 就是为零 import 才单独拆出来的 —— 下载那层
+                # （`services/download.ts`）import 了 `expo-file-system`，
+                # 编不过也跑不起来，判据只能放在这个纯模块里。
+                "files": [
+                    "src/utils/options.ts",
+                    "src/utils/errorMessages.ts",
+                    "src/services/resultName.ts",
+                ],
             },
             indent=2,
         ),
@@ -520,6 +596,7 @@ const path = require('path')
 const [, , compiledDir, inputPath, outputPath] = process.argv
 const options = require(path.join(compiledDir, 'utils', 'options.js'))
 const messages = require(path.join(compiledDir, 'utils', 'errorMessages.js'))
+const resultName = require(path.join(compiledDir, 'services', 'resultName.js'))
 
 const input = JSON.parse(fs.readFileSync(inputPath, 'utf8'))
 const dynamicValues = { fonts: input.fonts || [] }
@@ -533,6 +610,12 @@ for (const capability of input.capabilities) {
   rendered[capability.id] = options.visibleItems(schema, initial, dynamicValues).map((i) => i.key)
 }
 
+// 落盘改名的判据：用例与期望值都由 Python 那边给，这里只负责**跑真模块**。
+// 在 JS 里再抄一份期望值就成了第二份真相，改一边忘一边时测试照样绿。
+const result_names = (input.result_name_cases || []).map((c) =>
+  resultName.solveResultName(c.wanted, c.current),
+)
+
 fs.writeFileSync(
   outputPath,
   JSON.stringify({
@@ -540,9 +623,41 @@ fs.writeFileSync(
     missing_error_codes: messages.missingErrorCodes(input.server_error_codes || []),
     payloads,
     rendered,
+    result_names,
   }),
 )
 '''
+
+
+#: 下载落盘改名的用例：(服务端给的结果名, 下载后盘上的名字, 期望返回)。
+#:
+#: 期望值写在这边、由 Python 断言，JS 那份只负责跑真模块 —— 两边各写一份
+#: 期望值就成了第二份真相，改一边忘一边时照样绿。
+#:
+#: 前四条是这条缺陷的正面样本：中文 / 空格 / 括号 / 纯 ASCII 的结果名，
+#: 原生下载都会落成一次性令牌（`URLUtil.guessFileName` 认不出 RFC 5987 的
+#: `filename*=`），必须由客户端改名。后面几条是**守卫**：名字来自网络，
+#: 带路径分量的不许落到 `File.rename` 手上，否则文件会被挪到别的目录去。
+RESULT_NAME_CASES: list[tuple] = [
+    ("测试图片.jpg", "b1f9e0520d348bba127e8c9196b3f8db.jpg", "测试图片.jpg"),
+    ("中文 文件名.jpg", "75ed4d3aa7b602498b74ff63542e3833.jpg", "中文 文件名.jpg"),
+    ("report(最终版).docx", "0f2c9e11ab34cd56ef78901234567890.docx", "report(最终版).docx"),
+    ("photo.png", "aa11bb22cc33dd44ee55ff6677889900.png", "photo.png"),
+    # 盘上已经叫这个名（ASCII 名走普通 `filename=` 形式时就是这样）→ 不必改
+    ("photo.png", "photo.png", None),
+    # 前后空白削掉；只剩空白等于没给
+    ("  测试图片.jpg  ", "tok.jpg", "测试图片.jpg"),
+    ("   ", "tok.jpg", None),
+    # 没给名字（老调用方 / 服务端没带）→ 什么都不做
+    (None, "tok.jpg", None),
+    ("", "tok.jpg", None),
+    # 守卫：路径分量会改变文件落在哪 —— 一律不改名
+    ("../../evil.jpg", "tok.jpg", None),
+    ("a/b.jpg", "tok.jpg", None),
+    ("a\\b.jpg", "tok.jpg", None),
+    (".", "tok.jpg", None),
+    ("..", "tok.jpg", None),
+]
 
 
 def run_mobile_driver(compiled: pathlib.Path, capabilities: list[dict], config: dict) -> dict:
@@ -556,6 +671,10 @@ def run_mobile_driver(compiled: pathlib.Path, capabilities: list[dict], config: 
                 "capabilities": capabilities,
                 "fonts": config.get("txt_fonts", []),
                 "server_error_codes": config.get("error_codes", []),
+                "result_name_cases": [
+                    {"wanted": wanted, "current": current}
+                    for wanted, current, _ in RESULT_NAME_CASES
+                ],
             }
         ),
         encoding="utf-8",
@@ -682,6 +801,20 @@ def wait_text(page: Page, needle: str, timeout: int = 300_000) -> None:
     page.wait_for_function(
         "(t) => (document.body.textContent || '').includes(t)", arg=needle, timeout=timeout
     )
+
+
+def wait_text_quiet(page: Page, needle: str, timeout: int = 30_000) -> None:
+    """等一句话出现，**等不到也不抛**。
+
+    专门用给「被测的那句话」：等不到时该由紧随其后的 `check` 判红并如实记进
+    报告，而不是让整个脚本在这里断掉 —— 断掉之后后面的判据一条都跑不到，
+    只剩一个 traceback，报告也就不完整了（反向验证时正是这种情况：
+    把修复抽掉之后，这里必须变成一条 FAIL，不是一次崩溃）。
+    """
+    try:
+        wait_text(page, needle, timeout=timeout)
+    except Exception:  # noqa: BLE001 —— playwright 的 TimeoutError，不值得为它 import 一个和内置重名的名字
+        pass
 
 
 def wait_settled(page: Page, timeout: int = 360_000) -> str:
@@ -1077,6 +1210,38 @@ def open_tool(page: Page, source: str, target: str) -> None:
     wait_text(page, "文件", timeout=60_000)
 
 
+def section_b2(driver: dict) -> None:
+    section("B2 结果文件落盘命名：中文名不许落成一次性令牌")
+    actual = driver.get("result_names")
+    if not isinstance(actual, list):
+        check(False, f"driver 没给出 result_names（拿到 {actual!r}）")
+        return
+
+    check(
+        len(actual) == len(RESULT_NAME_CASES),
+        f"{len(actual)} 条判据结果（应为 {len(RESULT_NAME_CASES)} 条）",
+    )
+
+    bad = [
+        f"{wanted!r} 盘上叫 {current!r} → {got!r}，应为 {expected!r}"
+        for (wanted, current, expected), got in zip(RESULT_NAME_CASES, actual)
+        if got != expected
+    ]
+    check(not bad, "每一条都符合判据" + ("；不符：" + "；".join(bad) if bad else ""))
+
+    # 这几条是**这条缺陷为什么存在**的机械对账：判据必须挂在 `download.ts`
+    # 的原生分支上，且用的是服务端给的结果名。判据对了却没人调，等于没修。
+    source = (MOBILE / "src" / "services" / "download.ts").read_text(encoding="utf-8")
+    check(
+        "solveResultName(wanted, file.name)" in source,
+        "download.ts 的原生分支真的调了 solveResultName（拿盘上现有的名字做比较）",
+    )
+    check(
+        "renameToResultName(file, request.filename)" in source,
+        "传进去的是 request.filename —— 服务端随任务给的那个结果名",
+    )
+
+
 def section_c(page: Page, capabilities: dict) -> None:
     section("C 三条真实链路（真界面 → 真后端 → 真产物）")
     ids = {c["id"] for c in capabilities["conversions"]}
@@ -1209,6 +1374,199 @@ def section_c(page: Page, capabilities: dict) -> None:
 
 
 # ----------------------------------------------------------------------
+# C4 段：打包下载的成功与失败（规格 §六）
+# ----------------------------------------------------------------------
+
+#: 结果下载那一条接口。打包与单项共用这个前缀 —— 注入期间不要点单项的「下载」
+ARCHIVE_ROUTE = "**/api/download/**"
+
+#: 注入的服务端错误信封。**形状必须与真货一致**（`{error: {code, message}}`），
+#: 否则验的是我们自己编出来的协议。message 特意选一句客户端**永远不会自己说**
+#: 的话：这样它出现在屏幕上就只可能来自「服务端的 message 被原样显示」这条路径，
+#: 不会和 `explainError` 的兜底文案（「服务器出错了」）撞车而蒙混过关。
+SERVER_ERROR_BODY = {
+    "error": {
+        "code": "SERVER_ERROR",
+        "message": "生成压缩包失败，请减少文件数量后重试",
+    }
+}
+
+#: 跨源响应少这个头，浏览器会在 `fetch` 那一层把响应拦掉 —— 注入的 500 就变成
+#: 一次 CORS 失败，验到的成了「连不上」而不是「服务端报错」，两条路会串味
+CORS_HEADERS = {"access-control-allow-origin": "*"}
+
+#: 页面上还有几个**可点的**「打包…」按钮。按不了的那个不算 —— 按钮在忙的时候
+#: 标签是「打包中…」，所以按前缀匹配，不写死「打包下载」
+ENABLED_ARCHIVE_BUTTONS = """() => Array.from(document.querySelectorAll('button'))
+    .filter((el) => (el.innerText || '').trim().startsWith('打包')
+                    && !el.disabled
+                    && el.getAttribute('aria-disabled') !== 'true').length"""
+
+
+def archive_names(page: Page) -> list[str]:
+    """服务端自己报的那份结果清单 —— 拿它当 ZIP 成员的裁判，不在脚本里另抄一份"""
+    return [
+        task["result"]["filename"]
+        for task in batch_snapshot(page)["tasks"]
+        if task.get("result")
+    ]
+
+
+def submit_pair(page: Page) -> None:
+    """提交一批**两个**文件。
+
+    两个是必须的：只有一个结果时服务端直接把那一个文件当整批给
+    （`batch_service.register_batch` 的 `single` 那一支），根本不打包 ——
+    拿单个文件永远验不到 ZIP。
+    """
+    open_tool(page, "JPG", "PNG")
+    pick_files(page, "选择文件", [SAMPLES / "pair1.jpg", SAMPLES / "pair2.jpg"])
+    page.get_by_role("button", name="开始转换").first.click()
+    page.wait_for_url(re.compile(r".*/task/"), timeout=180_000)
+    settled = wait_settled(page)
+    check(settled == "已完成", f"两个文件都转完了（界面显示「{settled}」）")
+    # 光看到「已完成」还不够：快照是**两跳**的（先到计数、后到明细），
+    # 而且整批的 ZIP 是收尾那一步才登记令牌的 —— 卡片上那个按钮出现，
+    # 才说明 `snapshot.result.download_url` 真的到了位。不这么等就是抢跑
+    page.get_by_role("button", name="打包下载").first.wait_for(
+        state="visible", timeout=120_000
+    )
+
+
+def section_c4(page: Page) -> None:
+    section("C4 打包下载：成功一次、失败两次、失败之后还能真的再下（规格 §六）")
+
+    # ---- 成功：整批必须是一个真 ZIP，成员逐一验 ----
+    submit_pair(page)
+    expected = archive_names(page)
+    check(len(expected) == 2, f"服务端确认这一批有两个结果（{expected}）")
+    archive_name = batch_snapshot(page)["result"]["archive_filename"]
+
+    with page.expect_download(timeout=120_000) as download:
+        page.get_by_role("button", name="打包下载").first.click()
+    zip_path = DOWNLOADS / "c4-archive.zip"
+    download.value.save_as(str(zip_path))
+    check(
+        download.value.suggested_filename == archive_name,
+        f"落盘用的名字就是服务端给的 archive_filename"
+        f"（浏览器 {download.value.suggested_filename!r} / 服务端 {archive_name!r}）",
+    )
+
+    zipped = inspect_zip(zip_path)
+    check(zipped["broken"] is None, f"ZIP 每个成员的 CRC 都对得上（坏的成员：{zipped['broken']}）")
+    members = [item["name"] for item in zipped["items"]]
+    check(
+        members == expected,
+        f"ZIP 里就是服务端报的那两份结果（ZIP {members} / 服务端 {expected}）",
+    )
+    check(
+        [item["format"] for item in zipped["items"]] == ["PNG", "PNG"],
+        f"ZIP 每个成员都是真 PNG，不是零字节占位"
+        f"（解码器说 {[item['format'] for item in zipped['items']]}）",
+    )
+    # 两张源图尺寸不同，所以「分别对得上」这件事把「同一个文件塞了两遍」也一并挡掉
+    check(
+        [item["size"] for item in zipped["items"]] == [[200, 120], [320, 240]],
+        f"ZIP 里两个成员各自是那张源图转出来的尺寸"
+        f"（{[(item['name'], item['size']) for item in zipped['items']]}）",
+    )
+    # 下完之后 `await polling.refresh()` 才把 `download_url` 撤下来，而
+    # `expect_download` 在**浏览器开始下载**那一刻就返回了 —— 比快照早。
+    # 不等一下就读页面正文，会撞在「卡片还在」的那一瞬间（C1 段量到过这种窗口）
+    wait_text_quiet(page, "结果已经被下载过或已过期", timeout=60_000)
+    check(
+        "结果已经被下载过或已过期" in text_of(page),
+        "整批下走之后，界面如实说「已经被下载过或已过期」",
+    )
+
+    # ---- 失败一：服务端 500（打包/取件那一步炸了）----
+    submit_pair(page)
+    check(
+        page.eval_on_selector_all("button", ENABLED_ARCHIVE_BUTTONS) == 1,
+        "新批次上「打包下载」是可点的（下面要点的就是它）",
+    )
+    console_before = len(console_errors)
+    page.route(
+        ARCHIVE_ROUTE,
+        lambda route: route.fulfill(
+            status=500,
+            headers=CORS_HEADERS,
+            content_type="application/json",
+            body=json.dumps(SERVER_ERROR_BODY),
+        ),
+    )
+    page.get_by_role("button", name="打包下载").first.click()
+    wait_text_quiet(page, SERVER_ERROR_BODY["error"]["message"])
+    check(
+        SERVER_ERROR_BODY["error"]["message"] in text_of(page),
+        "服务端报错时界面把它那句话原样说出来了"
+        "（改之前这里是个空 catch，屏幕上什么都不会发生）",
+    )
+    check(
+        "全部结果" in text_of(page)
+        and page.eval_on_selector_all("button", ENABLED_ARCHIVE_BUTTONS) == 1,
+        "提示画在「全部结果」卡片里，按钮也回到了可点状态（不是卡在「打包中…」）",
+    )
+    snapshot(page, "任务页（打包下载被服务端拒绝）")
+
+    # ---- 失败二：根本连不上（`fetch` 自己就 reject）----
+    #
+    # 和上一条是**两条不同的分支**：上一条走的是「拿到了响应、但不是 2xx」，
+    # 这一条走的是「压根没拿到响应」—— 客户端归一成不同的错误码，也是两条不同的文案。
+    page.unroute(ARCHIVE_ROUTE)
+    page.route(ARCHIVE_ROUTE, lambda route: route.abort("failed"))
+    page.get_by_role("button", name="打包下载").first.click()
+    wait_text_quiet(page, "无法连接服务器")
+    check("无法连接服务器" in text_of(page), "连不上时界面也说得出话（不再是点了没反应）")
+
+    # ③ 不泄漏：这段提示里不许出现异常对象本身的话、堆栈、内部路径
+    snapshot(page, "任务页（打包下载连不上）")
+
+    # ④ 没有未处理的 Promise rejection。`void onDownloadArchive()` 那个 `void`
+    #    什么都不会接住，所以这里必须由代码自己接 —— 接不住的会以
+    #    `Uncaught (in promise)` 的形式落到控制台
+    leaked = [item for item in console_errors[console_before:] if "Uncaught" in item]
+    check(
+        not leaked,
+        f"两轮失败没有留下未处理的 Promise rejection（新增控制台错误：{console_errors[console_before:] or '无'}）",
+    )
+
+    # 注入这一段在控制台留下的条目：**另行钉死，不是豁免**。
+    # 浏览器对「响应是 500」和「请求被掐断」本来就会各记一条资源错误，
+    # 那是我们主动制造失败这个动作的产物。这里要求它正好是那两条 ——
+    # 区间里混进任何别的东西（比如一条真的未处理 rejection）都会红。
+    excused = console_errors[console_before:]
+    check(
+        len(excused) == 2
+        and any("status of 500" in item for item in excused)
+        and any("ERR_FAILED" in item for item in excused),
+        f"注入的两轮失败在控制台留下的正是那两条资源错误、且只有那两条（实际：{excused}）",
+    )
+    injected_console_span[:] = [console_before, len(console_errors)]
+
+    # ---- 失败之后还能真的下下来 ----
+    #
+    # 这两条一起证一件事：失败提示说的是实话。两轮注入都没有真的把请求发出去
+    # （`fulfill` 与 `abort` 都在浏览器这一侧就结束了），令牌没被用掉，
+    # 所以解除注入之后**同一批**必须还能下成 —— 提示没有把人带进死胡同。
+    page.unroute(ARCHIVE_ROUTE)
+    with page.expect_download(timeout=120_000) as download:
+        page.get_by_role("button", name="打包下载").first.click()
+    retry_path = DOWNLOADS / "c4-archive-retry.zip"
+    download.value.save_as(str(retry_path))
+    retried = inspect_zip(retry_path)
+    check(
+        [item["name"] for item in retried["items"]] == expected
+        and all(item["bytes"] > 0 for item in retried["items"]),
+        f"两轮失败之后同一批还能真的下成（{[(i['name'], i['bytes']) for i in retried['items']]}）",
+    )
+    check(
+        "生成压缩包失败" not in text_of(page) and "无法连接服务器" not in text_of(page),
+        "下载成功之后那两句失败提示都不在屏幕上了",
+    )
+
+
+# ----------------------------------------------------------------------
 # D 段：界面行为
 # ----------------------------------------------------------------------
 
@@ -1300,6 +1658,7 @@ def section_d(page: Page, capabilities: dict) -> None:
         "() => { try { return localStorage.getItem('filetools.history') } catch (e) { return null } }"
     )
     check(stored is not None, "历史真的写进了本机存储（AsyncStorage → localStorage）")
+    entries: list[dict] = []
     if stored:
         entries = json.loads(stored)
         keys = set()
@@ -1315,12 +1674,28 @@ def section_d(page: Page, capabilities: dict) -> None:
         check(len(stored) < 20_000, f"历史整包只有 {len(stored)} 字节 —— 没有把文件塞进去")
     snapshot(page, "历史")
 
-    # D5 最近处理：刚跑完的三条要出现在首页
+    # D5 最近处理：首页那三条**必须就是历史里最近的三条**。
+    #
+    # 原来写的是 `"sample" in home_text`，它暗含一个假设：前面刚跑的批次一定还
+    # 在前三条里。可首页只画 `slice(0, 3)`（`HomeScreen.tsx`）—— C4 段多跑了
+    # 两批之后，sample 那几条被挤了出去，这条断言就在**没有任何产品缺陷**的
+    # 情况下变红（2026-10-11 实测如此）。断言不该依赖脚本自己跑了几批。
+    #
+    # 改成拿历史里真实的前三条对账：不比原来松，反而更紧 ——
+    # 排序（`createdAt` 倒序）和条数上限一并钉住了。
+    newest_three = [
+        item["filename"]
+        for item in sorted(entries, key=lambda item: item.get("createdAt") or 0, reverse=True)[:3]
+    ]
     page.goto(APP, wait_until="load", timeout=120_000)
     wait_text(page, "最近处理", timeout=120_000)
     page.wait_for_timeout(1500)
     home_text = text_of(page)
-    check("sample" in home_text, "首页「最近处理」列出了刚才那三次")
+    missing = [name for name in newest_three if name not in home_text]
+    check(
+        bool(newest_three) and not missing,
+        f"首页「最近处理」正好列出历史里最近的三份（应有 {newest_three}，缺 {missing}）",
+    )
     check("还没有处理过文件" not in home_text, "有记录了就不再显示空态")
 
     # D6 窄屏：三档都不能横向溢出
@@ -1580,17 +1955,44 @@ def write_report() -> tuple[int, int]:
         lines.append("失败项：")
         lines.extend(f"  - {label}" for label in failed)
         lines.append("")
-    if console_errors:
-        lines.append(f"浏览器控制台错误 {len(console_errors)} 条：")
-        lines.extend(f"  - {item}" for item in console_errors[:20])
+    excused = excused_console_errors()
+    unexpected = unexpected_console_errors()
+    if unexpected:
+        lines.append(f"浏览器控制台错误 {len(unexpected)} 条：")
+        lines.extend(f"  - {item}" for item in unexpected[:20])
     else:
-        lines.append("浏览器控制台无错误。")
+        lines.append("浏览器控制台无错误（C4 段自己注入失败造成的那几条不计入，见 C4 的断言）。")
+    if excused:
+        lines.append(f"C4 注入失败留下的控制台条目 {len(excused)} 条（已在那一段逐条断言）：")
+        lines.extend(f"  - {item}" for item in excused)
     REPORT.write_text("\n".join(lines), encoding="utf-8")
     return passed, len(results)
 
 
+def excused_console_errors() -> list[str]:
+    """被 C4 自己注入的失败「冤枉」的那几条控制台错误（区间由 C4 登记）。"""
+    if len(injected_console_span) != 2:
+        return []
+    start, stop = injected_console_span
+    return console_errors[start:stop]
+
+
+def unexpected_console_errors() -> list[str]:
+    """除注入那一段之外的全部控制台错误 —— 这些一条都不许有。"""
+    if len(injected_console_span) != 2:
+        return list(console_errors)
+    start, stop = injected_console_span
+    return console_errors[:start] + console_errors[stop:]
+
+
 def summary() -> int:
-    check(not console_errors, f"浏览器控制台无错误（{len(console_errors)} 条）")
+    real_errors = unexpected_console_errors()
+    excused = excused_console_errors()
+    label = f"浏览器控制台无错误（{len(real_errors)} 条"
+    if excused:
+        label += f"；另有 {len(excused)} 条是 C4 自己注入失败造成的，见那一段的断言"
+    label += "）"
+    check(not real_errors, label)
     passed, total = write_report()
     print(f"\n=== 汇总：{passed}/{total} 通过 ===", flush=True)
     print(f"报告写入 {REPORT}", flush=True)
@@ -1631,6 +2033,7 @@ def main() -> int:
 
     section_a(sources, package, capabilities)
     section_b(capabilities, config, driver)
+    section_b2(driver)
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
@@ -1648,6 +2051,7 @@ def main() -> int:
         page.wait_for_timeout(1500)
         snapshot(page, "首页")
         section_c(page, capabilities)
+        section_c4(page)
         section_d(page, capabilities)
         section_e(page)
         browser.close()

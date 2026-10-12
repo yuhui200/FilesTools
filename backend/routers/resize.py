@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from compressors.pipeline import PipelineOptions
 from compressors.resizer import ResizeRequest
@@ -17,10 +17,11 @@ from routers.params import (
     parse_target_bytes,
 )
 from routers.tasks import TaskCreatedResponse, build_task_response
+from routers.uploads import declare_upload_filenames
 from tasks.image_tasks import submit_image_batch
 from utils.errors import ValidationError
 
-router = APIRouter(prefix="/api/image", tags=["image"])
+router = APIRouter(prefix="/api/image", tags=["image"], dependencies=[Depends(declare_upload_filenames)])
 
 OUTPUT_SUFFIX = "_resized"
 ARCHIVE_STEM = "resized_images"

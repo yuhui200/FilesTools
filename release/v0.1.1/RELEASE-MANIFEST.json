@@ -1,9 +1,9 @@
 {
   "product": "FileTools",
   "version": "0.1.1",
-  "generated_at": "2026-10-11T18:29:22+08:00",
+  "generated_at": "2026-10-11T22:14:00+08:00",
   "git": {
-    "commit": "c57d456b828e66d9a9a197dc44c93a70e9f2e396",
+    "commit": "0e3357575ace24d003e73906492675c65666e51d",
     "branch": "main",
     "dirty": true
   },
@@ -29,8 +29,8 @@
     {
       "platform": "android",
       "file": "android/FileTools-0.1.1-release.apk",
-      "bytes": 98884276,
-      "sha256": "01202bf39b826a807f1e8efcf009ac45388426d0f3cd91fae9c75fa68b32f22e",
+      "bytes": 98885960,
+      "sha256": "184a01010804472b87aaae52fc5655afcd69d336b7cc0c843e3d8ca5beb31bce",
       "kind": "Android APK（含 4 个 ABI）",
       "signed": "debug",
       "detail": "由 `gradlew assembleRelease` 产出（构建于 D:\\filetools-build\\mobile\\android\\app\\build\\outputs\\apk\\release）；app/build.gradle 的 release 块用的是 signingConfigs.debug —— **debug keystore 签名，可安装、不可上架**"

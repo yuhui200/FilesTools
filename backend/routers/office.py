@@ -22,7 +22,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 
 from config import settings
 from office.loader import KIND_EXCEL, KIND_POWERPOINT, KIND_TEXT, KIND_WORD
@@ -35,13 +35,14 @@ from routers.pdf_schemas import (
     build_document_response,
     build_pdf_response,
 )
+from routers.uploads import declare_upload_filenames
 from services.doc_service import convert_document, receive_office
 from services.pdf_to_docx import convert_pdf_to_docx
 from services.progress import progress_store
 from utils.errors import JobNotFoundError
 from utils.files import create_temp_dir, remove_dir
 
-router = APIRouter(prefix="/api/office", tags=["office"])
+router = APIRouter(prefix="/api/office", tags=["office"], dependencies=[Depends(declare_upload_filenames)])
 
 #: 「最大文件大小」的档位说明。
 #: 只共享这段文字、不共享 ``Form(...)`` 对象本身 —— 同一个 FieldInfo 实例给两个路由用
